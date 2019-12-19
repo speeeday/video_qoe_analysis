@@ -1,0 +1,18 @@
+#!/usr/bin/python
+
+from ip_protocols import *
+
+import sys
+
+if len(sys.argv) < 2:
+    print "Usage: {} [<protocol number> | <protocol name>]".format(sys.argv[0])
+    sys.exit()
+
+try:
+    n = int(sys.argv[1])
+    print ip_protocol_numbers[n]
+except:
+    try:
+        print ip_protocols[sys.argv[1]]
+    except:
+        print "Unknown Protocol: {}".format(sys.argv[1])
