@@ -1,0 +1,1 @@
+TODO: explain format of spark queries, and how the data should be formatted to run these scripts, based on the trace generation
