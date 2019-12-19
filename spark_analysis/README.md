@@ -16,7 +16,8 @@ For example, using the same `<output_file>` that we converted we can run
 
 The IP Protocol shows up only as a number unfortunately and not a string. Using the `proto` script, you can provide a number or protocol to get the its respective mapping
 
-Example: `./proto 16`
-Example: `./proto ipv4`
+Example Usage #1: `./proto 16`
+
+Example Usage #2: `./proto ICMP`
 
 
