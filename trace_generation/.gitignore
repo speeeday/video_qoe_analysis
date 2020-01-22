@@ -1,4 +1,7 @@
 pcaps
+ssl_keys
+manifest_files
+http_archives
 *.data
 *.pcapng
 *.pcap
