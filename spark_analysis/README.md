@@ -10,4 +10,14 @@ To run spark queries, simply run a python file and provide the data file to exec
 
 For example, using the same `<output_file>` that we converted we can run
 
-`python identify_video_spark.py <output_file`
+`python identify_video_spark.py <output_file>`
+
+### IP Protocol Numbers
+
+The IP Protocol shows up only as a number unfortunately and not a string. Using the `proto` script, you can provide a number or protocol to get the its respective mapping
+
+Example Usage #1: `./proto 16`
+
+Example Usage #2: `./proto ICMP`
+
+

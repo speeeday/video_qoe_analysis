@@ -1,7 +1,7 @@
 TODO: add info about how to generate traces, modify BW links, set up mininet etc.
 
 ## Starting the Topology
-`python start_mininet.py --num-hosts <num_hosts>`
+`python start_mininet.py --num-hosts <num_hosts> --pcap-name <pcap_name> --link <video_link>`
 
 Current Issues
 - video doesn't always start when page is visited, need to click play
