@@ -2,6 +2,7 @@
 from selenium import webdriver
 import sys
 import time
+import os
 
 # Usage: python netflix_video.py [video link]
 #
@@ -20,6 +21,9 @@ assert "Netflix" in driver.title
 
 #print driver.current_url
 #sys.exit()
+
+os.system('./preserve_logs.sh')
+time.sleep(2)
 
 my_username = open('credentials/netflix_username.txt').read().strip('\n').split('\n')[0]
 my_password = open('credentials/netflix_password.txt').read().strip('\n').split('\n')[0]
