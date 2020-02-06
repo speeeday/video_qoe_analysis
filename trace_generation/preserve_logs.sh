@@ -1,3 +1,4 @@
+#!/bin/bash
 # find chrome window id
 wid=$(xdotool search --class Chrome | tail -n1)
 # build tab key sequence to set 'persistent logs'
