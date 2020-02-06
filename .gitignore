@@ -4,3 +4,9 @@ youtube-dl
 trace_generation/geckodriver.log
 trace_generation/load-gecko
 trace_generation/firefox-profile/
+trace_generation/*.png
+trace_generation/minimal.py
+*.bak
+venv
+trace_generation/logs
+*.mp4
