@@ -2,9 +2,9 @@
 from selenium import webdriver
 from selenium import common
 import sys
-import time
+import time, json
 import os
-from subprocess import call
+from subprocess import call, check_output
 import numpy as np, re, csv, pickle
 
 from constants import *
@@ -19,7 +19,7 @@ class Youtube_Video_Loader:
 	def __init__(self):
 		self.t_initialize = time.time()
 		self.pull_frequency = .5 # how often to look at stats for nerds box (seconds)
-		self.early_stop = 6*60+50 # how long before the end of the video to stop (seconds)
+		self.early_stop = 10 # how long before the end of the video to stop (seconds)
 
 		chrome_options = webdriver.ChromeOptions();
 		chrome_options.add_argument("--headless")
@@ -40,7 +40,7 @@ class Youtube_Video_Loader:
 	def get_rid_of_ads(self):
 		# Check to see if there are ads
 		try:
-			self.driver.find_element_by_css_selector(".video_ads")
+			self.driver.find_element_by_css_selector(".video-ads")
 		except:
 			# no ads
 			return
@@ -77,6 +77,67 @@ class Youtube_Video_Loader:
 		# kill the browser instance
 		self.driver.quit()
 
+	def get_bitrate_data(self, link):
+		try:
+			"""Youtube doesn't neatly expose things like available bitrates, etc..., so we use other tools to get this."""
+			available_formats = check_output("youtube-dl {} --list-formats".format(link), shell=True).decode('utf-8')
+			available_formats = available_formats.split("\n")[4:]
+			d = []
+			resolution_to_format = {}
+			for row in available_formats:
+				fields = row.split('       ')
+				if fields == ['']:
+					continue
+				code = int(fields[0])
+				extension = fields[1].strip()
+				if extension != "mp4":
+					continue
+				resolution = fields[2].split(",")[0].strip()
+				resolution = resolution.split(" ")
+				try:
+					re.search("(.+)x(.+)", resolution[0])
+					resolution = resolution[0]
+					try:
+						resolution_to_format[resolution]
+						# prefer webm over mp4
+						if extension not in ["mp4", "webm"]:
+							raise ValueError("Unprepared to handle extension: {}".format(extension))
+						#resolution_to_format[resolution] = ("webm", code)					
+						resolution_to_format[resolution] = ("mp4", code)
+					except KeyError:
+						# this is the only format with this resolution so far
+						resolution_to_format[resolution] = (extension, code)
+				except:
+					# audio
+					continue
+
+			bitrates_by_resolution = {}
+			for resolution in resolution_to_format:
+				fmt,code = resolution_to_format[resolution]
+				print("Resolution: {}, Format: {}".format(resolution, fmt))
+				if os.path.exists("tmp.{}".format(fmt)):
+					call("rm tmp.{}".format(fmt), shell=True)
+				# download the video
+				call("youtube-dl -o tmp.{} -f {} {}".format(fmt, code, link), shell=True) 
+				# get the bitrates for this video
+				raw_output = check_output("ffmpeg_bitrate_stats -s video -of json tmp.{}".format(fmt), shell=True)
+				bitrate_obj = json.loads(raw_output.decode('utf-8'))
+				bitrates_by_resolution[resolution] = bitrate_obj["bitrate_per_chunk"]
+			# save this to the links metadata file
+			video_hash = re.search("youtube\.com\/watch\?v=(.+)",link).group(1)
+			fn = os.path.join(self.logfile_dir, self.log_prefix + video_hash)
+			if not os.path.exists(fn + "-metadata.pkl"):
+				# just create an empty object
+				pickle.dump({}, open(fn + "-metadata.pkl",'wb'))
+			this_link_metadata = pickle.load(open(fn + "-metadata.pkl",'rb'))
+			this_link_metadata["bitrates_by_resolution"] = bitrates_by_resolution
+			pickle.dump(this_link_metadata, open(fn + "-metadata.pkl",'wb'))
+
+		except Exception as e:
+			print(sys.exc_info())
+		finally:
+			self.driver.quit()
+
 	def run(self, link):
 		""" Loads a video, pulls statistics about the run-time useful for QoE estimation, saves them to file."""
 		self.video_statistics[link] = {"stats":[], "metadata": {}}
@@ -107,37 +168,20 @@ class Youtube_Video_Loader:
 				raise ValueError("Couldn't find stats for nerds box.")
 
 			# get video length
-			video_length = self.driver.find_element_by_css_selector('.ytp-time-duration').text.split(":")
-			video_length = 60 * int(video_length[0]) + int(video_length[1])
-			
-			
-			# get the resolutions
-			self.driver.save_screenshot("on_load.png")
-			resolutions = []
-			self.driver.find_element_by_css_selector('#movie_player > div.ytp-chrome-bottom > div.ytp-chrome-controls > div.ytp-right-controls > button:nth-child(3)').click()
-			self.driver.find_element_by_css_selector('#ytp-id-20 > div > div > div:nth-child(5)').click()
-			try:
-				i=1
-				while True:
-					print("Looping through resolutions {}".format(i))
-					res_text = self.driver.find_element_by_css_selector("#ytp-id-20 > div > div.ytp-panel-menu > div:nth-child({}) > div > div > span".format(i)).text
-					if res_text not in ["Auto", ""]:
-						resolutions.append(res_text)
-					i+=1
-			except:
-				pass
-			print("Resolutions : {}".format(resolutions))
-			self.video_statistics[link]["metadata"]["resolutions"] = resolutions
-
+			while True:
+				video_length = self.driver.find_element_by_css_selector('.ytp-time-duration').text.split(":")
+				try:
+					video_length = 60 * int(video_length[0]) + int(video_length[1])
+					break
+				except:
+					actions = webdriver.common.action_chains.ActionChains(self.driver)
+					actions.move_to_element(player)  # bring up the video length box again
+					actions.perform()
 
 			tick=time.time()
 			self.video_statistics[link]["metadata"]["start_wait"] = tick - self.t_initialize
-			print("Clicking Player")
-			self.driver.save_screenshot("zeroth.png")
+			print("Starting Player")
 			player.click(); 
-			self.driver.save_screenshot("first.png")
-			player.click()
-			self.driver.save_screenshot("second.png")
 			print("Going through stats for nerds")
 			# pull data from stats for nerds with whatever frequency you want
 			stop = False
@@ -161,14 +205,15 @@ class Youtube_Video_Loader:
 					"playback_progress": video_progress,
 					"timestamp": time.time(),
 				})
-				# print("VF: {} \n OR : {} \n BH : {} \n MT : {}".format(
-				# 	viewport_frames, current_optimal_res, buffer_health, mystery_text))
 
 				# Check to see if video is almost done
 				if time.time() > tick + video_length - self.early_stop:
 					stop = True
 					player.click() # stop the video
 				time.sleep(np.maximum(self.pull_frequency - (time.time() - t_calls),.001))
+
+			# Done watching video, get the bitrates
+			self.get_bitrate_data(link)
 
 		except Exception as e:
 			self.driver.save_screenshot("went_wrong.png")
