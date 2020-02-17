@@ -23,7 +23,6 @@ class Youtube_Video_Loader:
 
 		chrome_options = webdriver.ChromeOptions();
 		chrome_options.add_argument("--headless")
-		chrome_options.add_argument("--enable-blink-features=HTMLImports")
 		#chrome_options.add_extension(CHROME_ADBLOCK_LOCATION) doesn't work in headless chrome
 		chrome_options.binary_location = CHROME_BINARY_LOCATION
 		chrome_options.add_argument("--window-size=2000,3555") # Needs to be big enough to get all the resolutions
