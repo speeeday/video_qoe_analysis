@@ -69,9 +69,6 @@
 #         break
 #     time.sleep(1)
 
-# 
-
-# need SSIM, # of changes, rebuffer time, minimize startup delay
 from selenium import webdriver
 from selenium import common
 import sys
@@ -89,13 +86,15 @@ from constants import *
 
 
 class Netflix_Video_Loader:
-	def __init__(self):
+	def __init__(self, _id):
 		self.t_initialize = time.time()
 		self.pull_frequency = .5 # how often to look at stats for nerds box (seconds)
-		self.early_stop =1*3600+23*60 # how long before the end of the video to stop (seconds)
+		self.early_stop = 10
+
+		self.max_time = MAX_TIME
 
 		chrome_options = webdriver.ChromeOptions();
-		#chrome_options.add_argument("--headless")
+		#chrome_options.add_argument("--headless") # the netflix extension doesn't work with headless TODO - submit issue to someone?
 		#chrome_options.add_extension(CHROME_ADBLOCK_LOCATION) doesn't work in headless chrome
 		chrome_options.binary_location = CHROME_BINARY_LOCATION
 		chrome_options.add_argument("--window-size=2000,3555") # Needs to be big enough to get all the resolutions
@@ -107,20 +106,25 @@ class Netflix_Video_Loader:
 		self.my_username = open('credentials/netflix_username.txt').read().strip('\n').split('\n')[0]
 		self.my_password = open('credentials/netflix_password.txt').read().strip('\n').split('\n')[0]
 
+		self._id = _id
 		self.video_statistics = {}
 		self.logfile_dir = "./logs"
+		self.error_report_dir = ERROR_REPORT_DIR
 		if not os.path.exists(self.logfile_dir):
 			call("mkdir {}".format(self.logfile_dir), shell=True)
-		self.log_prefix = "netflix_stats_log-"
+		self.log_prefix = "netflix_stats_log_{}-".format(self._id)
 
 		self.login_url = "https://www.netflix.com/login"
+
+	def save_screenshot(self, img_name):
+		self.driver.save_screenshot(os.path.join(self.error_report_dir, "netflix_" + img_name))
 
 	def shutdown(self):
 		# write all data to file
 		for link in self.video_statistics:
 			if self.video_statistics[link]["stats"] == []:
 				continue
-			video_hash = re.search("netflix\.com\/watch\/(.+)\?",link).group(1)
+			video_hash = re.search("netflix\.com\/watch\/(.+)",link).group(1)
 			fn = os.path.join(self.logfile_dir, self.log_prefix + video_hash)
 			with open(fn + "-stats.csv", 'w') as f:
 				csvw = csv.DictWriter(f, list(self.video_statistics[link]["stats"][0].keys()))
@@ -143,11 +147,20 @@ class Netflix_Video_Loader:
 		self.driver.find_element_by_class_name("btn-submit").click()
 		while True: #wait for the page to load
 			try:
-				self.driver.find_elements_by_class_name("profile-icon")[1].click()
+				self.driver.find_elements_by_class_name("profile-icon")[NETFLIX_PROFILE_INDEX].click()
 				break
 			except:
 				time.sleep(1)
 
+	def done_watching(self, video_progress):
+		# check to see if max time has been hit, or if we are close enough to the video end
+		if time.time() - self.t_initialize > self.max_time:
+			print("Max time reached - exiting.")
+			return True
+		elif time.time() > video_progress - self.early_stop:
+			print("Close enough to video end - exiting.")
+			return True
+		return False
 
 	def run(self, link):
 		""" Loads a video, pulls statistics about the run-time useful for QoE estimation, saves them to file."""
@@ -159,16 +172,24 @@ class Netflix_Video_Loader:
 			self.driver.get(link)
 			t_since_last_fetched = time.time()
 			while self.driver.current_url != link:
-				if time.time() - t_since_last_fetched > 2:
+				if time.time() - t_since_last_fetched > 10:
 					print("Fetching again")
+					print("Note link is: {} desired is {}".format(self.driver.current_url, link))
 					self.driver.get(link)
+					t_since_last_fetched = time.time()
 				time.sleep(1)
 
+			#t_since_last_fetched = time.time()
 			while True: # wait for page to load
 				try:
 					player = self.driver.find_element_by_css_selector(".VideoContainer")
 					break
 				except:
+					# if time.time() - t_since_last_fetched > 10:
+					# 	self.driver.save_screenshot("long_wait.png")
+					# 	print("Fetching again")
+					# 	self.driver.get(link)
+					# 	t_since_last_fetched = time.time()
 					time.sleep(1)
 			# video auto-plays
 			tick=time.time()
@@ -180,8 +201,6 @@ class Netflix_Video_Loader:
 			print("Sending keys")
 			actions.key_down(Keys.ALT).key_down(Keys.CONTROL).key_down(Keys.SHIFT).send_keys("d").key_up(Keys.ALT).key_up(Keys.SHIFT).key_up(Keys.CONTROL).perform();
 			
-			self.driver.save_screenshot("on_load.png")
-
 			print("Going through stats for nerds")
 			# pull data from stats for nerds with whatever frequency you want
 			stop = False
@@ -206,15 +225,14 @@ class Netflix_Video_Loader:
 				})
 
 				# Check to see if video is almost done
-				if time.time() > tick + video_length - self.early_stop:
+				if self.done_watching(tick + video_length):
 					stop = True
+					# pause
 					actions = webdriver.common.action_chains.ActionChains(self.driver)
-					# need to close the dev console to be able to click on the player
-					actions.key_down(Keys.ALT).key_down(Keys.CONTROL).key_down(Keys.SHIFT).send_keys("d").key_up(Keys.ALT).key_up(Keys.SHIFT).key_up(Keys.CONTROL).perform();
-					player.click()
+					actions.send_keys(Keys.SPACE).perform()
 				time.sleep(np.maximum(self.pull_frequency - (time.time() - t_calls),.001))
 		except Exception as e:
-			self.driver.save_screenshot("went_wrong.png")
+			self.driver.save_screenshot("went_wrong_{}.png".format(self._id))
 			print(sys.exc_info())
 		finally:
 			self.shutdown()
@@ -223,9 +241,11 @@ def main():
 	import argparse
 	parser = argparse.ArgumentParser()
 	parser.add_argument('--link', action='store')
+	parser.add_argument('--id', action='store')
 	args = parser.parse_args()
 
-	nvl = Netflix_Video_Loader()
+
+	nvl = Netflix_Video_Loader(args.id)
 	nvl.run(args.link)
 
 if __name__ == "__main__":

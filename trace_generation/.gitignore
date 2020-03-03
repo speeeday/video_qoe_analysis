@@ -1,7 +1,9 @@
 pcaps
+__pycache__/*
 ssl_keys
 manifest_files
 http_archives
 *.data
 *.pcapng
 *.pcap
+screenlog*

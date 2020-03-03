@@ -16,13 +16,15 @@ from constants import *
 
 
 class Youtube_Video_Loader:
-	def __init__(self):
+	def __init__(self, _id):
 		self.t_initialize = time.time()
 		self.pull_frequency = .5 # how often to look at stats for nerds box (seconds)
 		self.early_stop = 10 # how long before the end of the video to stop (seconds)
 
+		self.max_time = MAX_TIME
+
 		chrome_options = webdriver.ChromeOptions();
-		chrome_options.add_argument("--headless")
+		#chrome_options.add_argument("--headless")
 		#chrome_options.add_extension(CHROME_ADBLOCK_LOCATION) doesn't work in headless chrome
 		chrome_options.binary_location = CHROME_BINARY_LOCATION
 		chrome_options.add_argument("--window-size=2000,3555") # Needs to be big enough to get all the resolutions
@@ -31,10 +33,25 @@ class Youtube_Video_Loader:
 		self.driver = webdriver.Chrome(chrome_options=chrome_options, desired_capabilities=caps)
 
 		self.video_statistics = {}
+		self._id = _id
 		self.logfile_dir = "./logs"
+		self.error_report_dir = ERROR_REPORT_DIR
 		if not os.path.exists(self.logfile_dir):
 			call("mkdir {}".format(self.logfile_dir), shell=True)
-		self.log_prefix = "youtube_stats_log-"
+		self.log_prefix = "youtube_stats_log_{}-".format(self._id)
+
+	def done_watching(self, video_progress):
+		# check to see if max time has been hit, or if we are close enough to the video end
+		if time.time() - self.t_initialize > self.max_time:
+			print("Max time reached - exiting.")
+			return True
+		elif time.time() > video_progress - self.early_stop:
+			print("Close enough to video end - exiting.")
+			return True
+		return False
+
+	def save_screenshot(self, img_name):
+		self.driver.save_screenshot(os.path.join(self.error_report_dir, "youtube_" + img_name))
 
 	def get_rid_of_ads(self):
 		# Check to see if there are ads
@@ -122,6 +139,8 @@ class Youtube_Video_Loader:
 				raw_output = check_output("ffmpeg_bitrate_stats -s video -of json tmp.{}".format(fmt), shell=True)
 				bitrate_obj = json.loads(raw_output.decode('utf-8'))
 				bitrates_by_resolution[resolution] = bitrate_obj["bitrate_per_chunk"]
+
+				call("rm tmp.{}".format(fmt), shell=True)
 			# save this to the links metadata file
 			video_hash = re.search("youtube\.com\/watch\?v=(.+)",link).group(1)
 			fn = os.path.join(self.logfile_dir, self.log_prefix + video_hash)
@@ -143,7 +162,21 @@ class Youtube_Video_Loader:
 
 		try: # lots of things can go wrong in this loop TODO - report errors 
 			self.driver.get(link)
-			player = self.driver.find_element_by_css_selector("#player-container-inner")
+			time.sleep(3) # a common error is that the page takes a little long to load, and it cant find the player 
+			max_n_tries,i = 5,0
+			while True:
+				try:
+					player = self.driver.find_element_by_css_selector("#player-container-inner")
+					break
+				except:
+					self.driver.get(link)
+					time.sleep(5)
+					i += 1
+				if i == max_n_tries:
+					print("Max number of tries hit trying to get the player-container-inner. Exiting.")
+					self.save_screenshot("player_container_unable_{}.png".format(self._id))
+					return
+
 			# Remove ads
 			self.get_rid_of_ads()
 
@@ -163,7 +196,7 @@ class Youtube_Video_Loader:
 				except common.exceptions.NoSuchElementException:
 					continue
 			if not stats_for_nerds_i:
-				self.driver.save_screenshot("went_wrong.png")
+				self.save_screenshot("no_stats_for_nerds_{}.png".format(self._id))
 				raise ValueError("Couldn't find stats for nerds box.")
 
 			# get video length
@@ -193,7 +226,10 @@ class Youtube_Video_Loader:
 				buffer_health = self.driver.find_element_by_xpath('//*[@id="movie_player"]/div[{}]/div/div[11]/span/span[2]'.format(stats_for_nerds_i)).text
 				mystery_text = self.driver.find_element_by_xpath('//*[@id="movie_player"]/div[{}]/div/div[15]/span'.format(stats_for_nerds_i)).text
 				mtext_re = re.search("s:(.+) t:(.+) b:(.+)-(.+)", mystery_text)
-				state = int(mtext_re.group(1)) # 4 -> paused, 5 -> paused&out of buffer, 8 -> playing, 9 -> rebuffering
+				try:
+					state = int(mtext_re.group(1)) # 4 -> paused, 5 -> paused&out of buffer, 8 -> playing, 9 -> rebuffering
+				except ValueError:
+					state = mtext_re.group(1) # c44->?
 				video_progress = float(mtext_re.group(2))
 
 				self.video_statistics[link]["stats"].append({
@@ -206,16 +242,15 @@ class Youtube_Video_Loader:
 				})
 
 				# Check to see if video is almost done
-				if time.time() > tick + video_length - self.early_stop:
+				if self.done_watching(tick + video_length):
 					stop = True
 					player.click() # stop the video
 				time.sleep(np.maximum(self.pull_frequency - (time.time() - t_calls),.001))
 
-			# Done watching video, get the bitrates
-			self.get_bitrate_data(link)
+			
 
 		except Exception as e:
-			self.driver.save_screenshot("went_wrong.png")
+			self.save_screenshot("went_wrong_{}.png".format(self._id))
 			print(sys.exc_info())
 		finally:
 			self.shutdown()
@@ -224,10 +259,17 @@ def main():
 	import argparse
 	parser = argparse.ArgumentParser()
 	parser.add_argument('--link', action='store')
+	parser.add_argument('--id', action='store')
+	parser.add_argument('--mode', action='store')
 	args = parser.parse_args()
 
-	yvl = Youtube_Video_Loader()
-	yvl.run(args.link)
+	yvl = Youtube_Video_Loader(args.id)
+	if args.mode == "run":
+		yvl.run(args.link)
+	elif args.mode == "get_bitrate":
+		yvl.get_bitrate_data(args.link)
+	else:
+		raise ValueError("Mode {} not recognized.".format(args.mode))
 
 if __name__ == "__main__":
 	main()

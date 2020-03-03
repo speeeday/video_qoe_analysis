@@ -1,4 +1,3 @@
-# need SSIM, # of changes, rebuffer time, minimize startup delay
 from selenium import webdriver
 from selenium import common
 import sys
@@ -16,7 +15,7 @@ from constants import *
 
 
 class Twitch_Video_Loader:
-	def __init__(self):
+	def __init__(self, _id):
 		self.t_initialize = time.time()
 		self.pull_frequency = .5 # how often to look at stats for nerds box (seconds)
 		self.early_stop = 10 # how long before the end of the video to stop (seconds)
@@ -31,11 +30,24 @@ class Twitch_Video_Loader:
 
 		self.video_statistics = {}
 		self.logfile_dir = "./logs"
+		self.error_report_dir = ERROR_REPORT_DIR
+		self._id = _id
 		if not os.path.exists(self.logfile_dir):
 			call("mkdir {}".format(self.logfile_dir), shell=True)
-		self.log_prefix = "twitch_stats_log-"
+		self.log_prefix = "twitch_stats_log_{}-".format(self._id)
 		self.max_ad_wait_interval = 60 # (seconds)
-		self.max_time = 120
+		self.max_time = MAX_TIME
+
+	def save_screenshot(self, img_name):
+		self.driver.save_screenshot(os.path.join(self.error_report_dir, "twitch_" + img_name))
+
+	def check_for_mature(self):
+		"""Some videos are labeled with an 'only for mature audiences' thing that you have to click to proceed. Click it."""
+		try:
+			self.driver.find_element_by_css_selector("div.content-overlay-gate__allow-pointers.tw-mg-t-3 > button > div > div").click()
+			print("Clicked mature button.")
+		except:
+			print("Not mature stream.")
 
 	def done_watching(self):
 		# max time
@@ -80,7 +92,7 @@ class Twitch_Video_Loader:
 				time.sleep(1)
 				if time.time() - t_start > self.max_ad_wait_interval:
 					print("Note -- max ad wait interval hit... refreshing")
-					self.driver.save_screenshot("waiting_for_ads.png")
+					self.save_screenshot("waiting_for_ads.png")
 					# some non-conforming page probably
 					return False
 			except:
@@ -196,7 +208,7 @@ class Twitch_Video_Loader:
 		try: # lots of things can go wrong in this loop TODO - report errors 
 			self.driver.get(link)
 			self.driver.implicitly_wait(5)
-			time.sleep(15)
+			self.check_for_mature()
 			# Remove ads
 			while not self.get_rid_of_ads():
 				self.driver.get(link)
@@ -311,7 +323,7 @@ class Twitch_Video_Loader:
 			# I think the bitrate is provided in the advanced stats panel
 
 		except Exception as e:
-			self.driver.save_screenshot("went_wrong.png")
+			self.save_screenshot("went_wrong_{}.png".format(self._id))
 			print(sys.exc_info())
 		finally:
 			self.shutdown()
@@ -320,9 +332,11 @@ def main():
 	import argparse
 	parser = argparse.ArgumentParser()
 	parser.add_argument('--link', action='store')
+	parser.add_argument('--id', action='store')
 	args = parser.parse_args()
 
-	tvl = Twitch_Video_Loader()
+
+	tvl = Twitch_Video_Loader(args.id)
 	tvl.run(args.link)
 
 if __name__ == "__main__":
