@@ -1,4 +1,4 @@
-pcaps
+pcaps/*.pcap
 __pycache__/*
 ssl_keys
 manifest_files
@@ -7,3 +7,4 @@ http_archives
 *.pcapng
 *.pcap
 screenlog*
+error_reports/*

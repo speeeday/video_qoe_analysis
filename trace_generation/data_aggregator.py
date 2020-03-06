@@ -88,6 +88,7 @@ class Data_Aggregator:
 			with open(stats_file, 'r') as f:
 				csvr = csv.DictReader(f)
 				[stats.append(row) for row in csvr]
+			self.stats_panel_info = stats
 			self.t_start_recording = stats[0]["timestamp"]		
 
 			# load video stats data
@@ -97,10 +98,10 @@ class Data_Aggregator:
 				self.t_start_recording_offset = meta_data['start_wait']
 
 		# load relevant pcap data
-		pcap_file = os.path.join(self.pcap_dir, "{}_{}.pcap".format(self.type,_id))
-		self.load_pcap(pcap_file)
+		self.load_pcap(_id)
 
-	def load_pcap(self, pcap_file_name):
+	def load_pcap(self, _id):
+		pcap_file_name = os.path.join(self.pcap_dir, "{}_{}.pcap".format(self.type,_id))
 		# first, convert the file to the correct format
 		call("mv {} {}".format(pcap_file_name, pcap_file_name + "ng"), shell=True)
 		call("editcap -F libpcap -T ether {} {}".format(pcap_file_name + "ng", pcap_file_name), shell=True)
@@ -172,12 +173,14 @@ class Data_Aggregator:
 					self.bytes_transfered[i][ip]
 				except KeyError:
 					self.bytes_transfered[i][ip] = np.zeros(self.n_bins)
+		pickle.dump(self.bytes_transfered, open(os.path.join(self.pcap_dir, "{}_processed.pkl".format(_id)),'wb'))
 
 	def populate_features(self, link, _id):
 		self.qoe_features[_id] = {
 			"byte_statistics": None,
 			"other_statistics": {},
-			"info": {"link": link}
+			"info": {"link": link},
+			"stats_panel": self.stats_panel_info,
 		}
 
 		# other statistics

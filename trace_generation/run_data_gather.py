@@ -64,76 +64,76 @@ class Data_Gatherer:
 		# Note -- we kill the selenium driver each time, since the subprocess spawns a different selenium driver
 
 
-		print("-----Starting Netflix data gather.------")
-		try: # lots of things can go wrong in this loop TODO - report errors 
-			self.startup()
-			# Netflix
-			# get a list of the n most popular netflix videos 
-			self.netflix_login()
-			self.netflix_video_ids = []
+		# print("-----Starting Netflix data gather.------")
+		# try: # lots of things can go wrong in this loop TODO - report errors 
+		# 	self.startup()
+		# 	# Netflix
+		# 	# get a list of the n most popular netflix videos 
+		# 	self.netflix_login()
+		# 	self.netflix_video_ids = []
 			
-			# we are on the splash page, go through all the videos on the page and get the video IDs
-			i = 0
+		# 	# we are on the splash page, go through all the videos on the page and get the video IDs
+		# 	i = 0
 			
-			while len(self.netflix_video_ids) < self.n_to_collect and i < max_n_iters:
-				all_video_boxes = self.driver.find_elements_by_class_name('slider-item')
-				print("Found {} video boxes.".format(len(all_video_boxes)))
-				for video_box in all_video_boxes:
-					try:
-						ptrack_content = video_box.find_element_by_css_selector('.ptrack-content').get_attribute("data-ui-tracking-context")
-					except:
-						continue
-					video_id_re = re.search("\%22video_id\%22\:(.+)\,\%22image_key",ptrack_content)
-					video_id = video_id_re.group(1)
-					self.netflix_video_ids.append(video_id)
-				self.netflix_video_ids = list(set(self.netflix_video_ids)) # remove duplicates
-				print("Up to {} netflix video ids.".format(len(self.netflix_video_ids)))
-				# scroll the page down to reveal more boxes
-				self.driver.execute_script("window.scrollBy(0,700)")
-				i += 1
-		except Exception as e:
-			print(sys.exc_info())
-		finally:
-			self.shutdown()
-		self.netflix_video_ids = [el for el in self.netflix_video_ids if el]
-		# Now gather stats about each of these
-		if len(self.netflix_video_ids) > self.n_to_collect:
-			self.netflix_video_ids = np.random.choice(self.netflix_video_ids, self.n_to_collect, replace=False)
-		for video_id in self.netflix_video_ids:
-			print("Watching netflix video with id : {}".format(video_id))
-			self.call_data_gather("netflix","https://www.netflix.com/watch/{}".format(video_id))
+		# 	while len(self.netflix_video_ids) < self.n_to_collect and i < max_n_iters:
+		# 		all_video_boxes = self.driver.find_elements_by_class_name('slider-item')
+		# 		print("Found {} video boxes.".format(len(all_video_boxes)))
+		# 		for video_box in all_video_boxes:
+		# 			try:
+		# 				ptrack_content = video_box.find_element_by_css_selector('.ptrack-content').get_attribute("data-ui-tracking-context")
+		# 			except:
+		# 				continue
+		# 			video_id_re = re.search("\%22video_id\%22\:(.+)\,\%22image_key",ptrack_content)
+		# 			video_id = video_id_re.group(1)
+		# 			self.netflix_video_ids.append(video_id)
+		# 		self.netflix_video_ids = list(set(self.netflix_video_ids)) # remove duplicates
+		# 		print("Up to {} netflix video ids.".format(len(self.netflix_video_ids)))
+		# 		# scroll the page down to reveal more boxes
+		# 		self.driver.execute_script("window.scrollBy(0,700)")
+		# 		i += 1
+		# except Exception as e:
+		# 	print(sys.exc_info())
+		# finally:
+		# 	self.shutdown()
+		# self.netflix_video_ids = [el for el in self.netflix_video_ids if el]
+		# # Now gather stats about each of these
+		# if len(self.netflix_video_ids) > self.n_to_collect:
+		# 	self.netflix_video_ids = np.random.choice(self.netflix_video_ids, self.n_to_collect, replace=False)
+		# for video_id in self.netflix_video_ids:
+		# 	print("Watching netflix video with id : {}".format(video_id))
+		# 	self.call_data_gather("netflix","https://www.netflix.com/watch/{}".format(video_id))
 
-		print("-----Starting Youtube data gather.------")
-		try:
-			self.startup()
+		# print("-----Starting Youtube data gather.------")
+		# try:
+		# 	self.startup()
 			
-			# Youtube
-			# get a list of youtube videos on the splash page
-			self.driver.get("https://www.youtube.com")
-			self.youtube_video_links = []
+		# 	# Youtube
+		# 	# get a list of youtube videos on the splash page
+		# 	self.driver.get("https://www.youtube.com")
+		# 	self.youtube_video_links = []
 
-			# we are on the splash page, go through all the videos on the page and get the video IDs
-			i = 0
-			while len(self.youtube_video_links) < self.n_to_collect and i < max_n_iters:
-				all_video_boxes = self.driver.find_elements_by_css_selector('a#thumbnail')
-				for video_box in all_video_boxes:
-					self.youtube_video_links.append(video_box.get_attribute("href"))
-				self.youtube_video_links = list(set(self.youtube_video_links))
-				# scroll the page down to reveal more boxes
-				self.driver.execute_script("window.scrollBy(0,700)")
-				i += 1
-		except Exception as e:
-			print(sys.exc_info())
-		finally:
-			self.shutdown()
+		# 	# we are on the splash page, go through all the videos on the page and get the video IDs
+		# 	i = 0
+		# 	while len(self.youtube_video_links) < self.n_to_collect and i < max_n_iters:
+		# 		all_video_boxes = self.driver.find_elements_by_css_selector('a#thumbnail')
+		# 		for video_box in all_video_boxes:
+		# 			self.youtube_video_links.append(video_box.get_attribute("href"))
+		# 		self.youtube_video_links = list(set(self.youtube_video_links))
+		# 		# scroll the page down to reveal more boxes
+		# 		self.driver.execute_script("window.scrollBy(0,700)")
+		# 		i += 1
+		# except Exception as e:
+		# 	print(sys.exc_info())
+		# finally:
+		# 	self.shutdown()
 		
-		# Now gather stats about each of these
-		self.youtube_video_links = [el for el in self.youtube_video_links if el]
-		if len(self.youtube_video_links) > self.n_to_collect:
-			self.youtube_video_links = np.random.choice(self.youtube_video_links, self.n_to_collect, replace=False)
-		for video_link in self.youtube_video_links:
-			print("Conducting data gather for video : {}".format(video_link))
-			self.call_data_gather("youtube", video_link)
+		# # Now gather stats about each of these
+		# self.youtube_video_links = [el for el in self.youtube_video_links if el]
+		# if len(self.youtube_video_links) > self.n_to_collect:
+		# 	self.youtube_video_links = np.random.choice(self.youtube_video_links, self.n_to_collect, replace=False)
+		# for video_link in self.youtube_video_links:
+		# 	print("Conducting data gather for video : {}".format(video_link))
+		# 	self.call_data_gather("youtube", video_link)
 
 		print("-----Starting Twitch data gather.------")
 		try:
