@@ -17,62 +17,23 @@ class Data_Aggregator:
 		self.log_dir = "./logs"
 		self.pcap_dir = "./pcaps"
 		self.save_dir = "./features"
-		self.metadata_dir = "./metadata"
-		self.error_report_dir = "./error_report_dir"
-		self.t_interval = 1 # seconds, interval over which to bin/sum/average statistics like # bytes received
+		self.metadata_dir = METADATA_DIR
+		self.error_report_dir = ERROR_REPORT_DIR
+		self.t_interval = T_INTERVAL # seconds, interval over which to bin/sum/average statistics like # bytes received
 		self.n_ips = 5
 		self.history_length = 30
 
-		self.known_ip_list_fn = "known_ips.pkl"
+		self.known_ip_list_fn = KNOWN_IP_LIST_FN
 
 		self.qoe_features = {}
 
 		self.append = True # whether or not we should append the aggregated features to the current features files or not
-
-	def get_asn_dist(self, asns):
-		# ASN_LIST -> %
-		asn_dist = np.zeros(len(ASN_LIST))
-		for asn in asns:
-			try:
-				asn_dist[ASN_LIST[asn]] += 1
-			except KeyError:
-				asn_dist[ASN_LIST["OTHER"]] += 1
-		assert np.sum(asn_dist) > 0
-
-		return asn_dist / np.sum(asn_dist) 
 
 	def cleanup_files(self):
 		# removes log files, pcaps, as they are no longer useful
 
 		call("rm pcaps/{}*".format(self.type), shell=True)
 		call("rm logs/{}*".format(self.type), shell=True)
-
-	def get_ip_likelihood(self,ip_list):
-
-		ip_likelihood = 0
-		if os.path.exists(os.path.join(self.metadata_dir, self.known_ip_list_fn)):
-			known_ips = pickle.load(open(os.path.join(self.metadata_dir, self.known_ip_list_fn),'rb'))
-		else:
-			known_ips = {"_types": ["twitch","youtube","netflix"], "data": {"twitch": [], "youtube": [], "netflix": []}}
-		_types = known_ips["_types"]
-		# TODO update this as model gets more complicated
-		ip_likelihood = [len(set(ip_list) & set(known_ips["data"][_type])) / len(set(ip_list)) for _type in _types]
-
-		if self.type == "no_video":
-			# no_video ips are too numerous to track
-			return ip_likelihood
-
-		# These IPs were communicated with when accessing this service, 
-		# add them to the data structure
-		# TODO - incorporate some sort of frequency, staleness, likelihood thing here
-		for ip in ip_list: # maybe change this to /24, although these could be v6 IP's, and there's no /24 analogy there
-			known_ips["data"][self.type].append(ip)
-
-		known_ips["data"][self.type] = list(set(known_ips["data"][self.type]))
-		pickle.dump(known_ips, open(os.path.join(self.metadata_dir, self.known_ip_list_fn),'wb'))
-
-		return ip_likelihood
-
 
 	def is_internal(self, ip):
 		# for now, check to see if ip is in constant field INTERNAL_IPS
@@ -96,6 +57,8 @@ class Data_Aggregator:
 			meta_data = pickle.load(open(meta_data_file,'rb'))
 			if self.type != "no_video":
 				self.t_start_recording_offset = meta_data['start_wait']
+			else:
+				self.t_start_recording_offset = 0
 
 		# load relevant pcap data
 		self.load_pcap(_id)
@@ -181,6 +144,7 @@ class Data_Aggregator:
 			"other_statistics": {},
 			"info": {"link": link},
 			"stats_panel": self.stats_panel_info,
+			"start_offset": self.t_start_recording_offset
 		}
 
 		# other statistics
@@ -203,10 +167,10 @@ class Data_Aggregator:
 				except KeyError:
 					asns[asn] = 1
 		n_asns = len(asns)
-		asn_dist = self.get_asn_dist(asns)
+		asn_dist = get_asn_dist(asns)
 		self.qoe_features[_id]["other_statistics"]["asn_dist"] = asn_dist
 		self.qoe_features[_id]["other_statistics"]["n_total_asns"] = n_asns
-		self.qoe_features[_id]["other_statistics"]["ip_likelihood"] = self.get_ip_likelihood(all_ips)
+		self.qoe_features[_id]["other_statistics"]["ip_likelihood"] = get_ip_likelihood(all_ips, self.type, modify=False)
 
 		# byte statistics
 
@@ -290,7 +254,7 @@ class Data_Aggregator:
 		print("Going through {} pcaps in no video aggregator...".format(len(pcaps)))
 		for pcap in pcaps:
 			_id = re.search("no_video_(.+).pcap", pcap).group(1)
-			self.load_pcap(pcap)
+			self.load_pcap(_id)
 			self.populate_features("", _id)
 
 		self.save_features()
@@ -308,7 +272,6 @@ class Data_Aggregator:
 				self.remove_files(_id, link)
 				continue
 			self.load_data(link, _id)
-
 			self.populate_features(link, _id)
 
 		self.save_features()
@@ -325,8 +288,10 @@ def main():
 	if args.mode == 'run':
 		if args.type == "no_video":
 			da.run_no_video()
-		else:
+		elif args.type in ["twitch", "youtube", "netflix"]:
 			da.run()
+		else:
+			raise ValueError("Type {} not recognized.".format(args.type))
 	elif args.mode == "visualize":
 		da.visualize_bit_transfers()
 	else:

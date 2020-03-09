@@ -12,9 +12,25 @@ import numpy as np, re, csv, pickle
 
 from constants import *
 
+# Mininet libraries
+from mininet.net import Mininet
+from mininet.link import TCIntf
+from mininet.log import setLogLevel, info
+from mininet.topo import Topo
+from mininet.link import TCLink
+
+class StaticTopo(Topo):
+    "Simple topo with 1 host"
+    def build(self):
+        switch1 = self.addSwitch('s1')
+
+        "iperf server host"
+        host1 = self.addHost('h1')
+        self.addLink(host1, switch1, bw = 10000) 
+
 class Data_Gatherer:
 	def __init__(self):
-		self.n_to_collect = 100 # number of videos or sessions to visit
+		self.n_to_collect = 10 # number of videos or sessions to visit
 		# Load credentials
 		self.netflix_login_url = "https://www.netflix.com/login"
 		self.netflix_username = open('credentials/netflix_username.txt').read().strip('\n').split('\n')[0]
@@ -35,9 +51,26 @@ class Data_Gatherer:
 
 	def call_data_gather(self, _type, link=None):
 		if link:
-			call("./run_data_collect.sh {} {}".format(_type,link), shell=True)
+			cmd = "./run_data_collect.sh {} {}".format(_type,link)
 		else:
-			call("./run_data_collect.sh {}".format(_type), shell=True)
+			cmd ="./run_data_collect.sh {}".format(_type) 
+
+		call(cmd,shell=True)
+
+		# # set up the mininet
+		# myTopo = StaticTopo()
+	 #    net = Mininet( topo=myTopo, link=TCLink )
+	 #    net.start()
+
+	 #    h1 = net.get('h1')
+	 #    intf = h1.intf()
+	 #    # call the data collection script
+	 #    h1.cmd(cmd,printPid=True)
+		# # check for need to change bandwidth
+		# # bandwidth object is array of [[time_start, time_end, max_bandwidth]]; units are seconds, seconds, Mbps
+		# # check if script is done executing
+		# # kill mininet 
+
 		call("python data_aggregator.py --mode run --type {}".format(_type), shell=True) # to prevent space problems
 
 	def netflix_login(self):
@@ -135,42 +168,42 @@ class Data_Gatherer:
 		# 	print("Conducting data gather for video : {}".format(video_link))
 		# 	self.call_data_gather("youtube", video_link)
 
-		print("-----Starting Twitch data gather.------")
-		try:
-			self.startup()
-			# Twitch
-			# get a list of popular, live channels
-			self.driver.get("https://www.twitch.tv/directory/all")
-			self.twitch_profiles = []
+		# print("-----Starting Twitch data gather.------")
+		# try:
+		# 	self.startup()
+		# 	# Twitch
+		# 	# get a list of popular, live channels
+		# 	self.driver.get("https://www.twitch.tv/directory/all")
+		# 	self.twitch_profiles = []
 
-			# we are on the splash page, go through all the channels on the page and get the profile names
-			i = 0
-			while len(self.twitch_profiles) < self.n_to_collect and i < max_n_iters:
-				all_video_boxes = self.driver.find_elements_by_css_selector('.tw-mg-b-2 .preview-card .preview-card-titles__subtitle-wrapper p > a')
-				for video_box in all_video_boxes:
-					if "directory" not in video_box.get_attribute('href'): # this is a link to a general game directory
-						# TODO - check to make sure the channel name is unicode (not foreign)
-						self.twitch_profiles.append(video_box.text)
-				self.twitch_profiles = list(set(self.twitch_profiles))
-				# scroll the page down to reveal more boxes
-				self.driver.execute_script("window.scrollBy(0,700)")
-				i += 1
-		except Exception as e:
-			print(sys.exc_info())
-		finally:
-			self.shutdown()
+		# 	# we are on the splash page, go through all the channels on the page and get the profile names
+		# 	i = 0
+		# 	while len(self.twitch_profiles) < self.n_to_collect and i < max_n_iters:
+		# 		all_video_boxes = self.driver.find_elements_by_css_selector('.tw-mg-b-2 .preview-card .preview-card-titles__subtitle-wrapper p > a')
+		# 		for video_box in all_video_boxes:
+		# 			if "directory" not in video_box.get_attribute('href'): # this is a link to a general game directory
+		# 				# TODO - check to make sure the channel name is unicode (not foreign)
+		# 				self.twitch_profiles.append(video_box.text)
+		# 		self.twitch_profiles = list(set(self.twitch_profiles))
+		# 		# scroll the page down to reveal more boxes
+		# 		self.driver.execute_script("window.scrollBy(0,700)")
+		# 		i += 1
+		# except Exception as e:
+		# 	print(sys.exc_info())
+		# finally:
+			# self.shutdown()
 
 		# now gather stats about each of these
-		self.twitch_profiles = [el for el in self.twitch_profiles if el]
-		if len(self.twitch_profiles) > self.n_to_collect:
-			self.twitch_profiles = np.random.choice(self.twitch_profiles, self.n_to_collect, replace=False)
-		for twitch_profile in self.twitch_profiles:
-			print("Watching stream of profile : {}".format(twitch_profile))
-			self.call_data_gather("twitch", "https://www.twitch.tv/{}".format(twitch_profile))
+		# self.twitch_profiles = [el for el in self.twitch_profiles if el]
+		# if len(self.twitch_profiles) > self.n_to_collect:
+		# 	self.twitch_profiles = np.random.choice(self.twitch_profiles, self.n_to_collect, replace=False)
+		# for twitch_profile in self.twitch_profiles:
+		# 	print("Watching stream of profile : {}".format(twitch_profile))
+		# 	self.call_data_gather("twitch", "https://www.twitch.tv/{}".format(twitch_profile))
 
 		print("-----Starting no video data gather.------")
 		# No video
-		for i in range(self.n_to_collect * 1): # get 3x as many of these sessions, so there is no data imbalance
+		for i in range(self.n_to_collect * 3): # get 3x as many of these sessions, so there is no data imbalance
 			self.call_data_gather("no_video")
 
 def main():

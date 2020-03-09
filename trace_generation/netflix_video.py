@@ -90,17 +90,16 @@ class Netflix_Video_Loader:
 		self.t_initialize = time.time()
 		self.pull_frequency = .5 # how often to look at stats for nerds box (seconds)
 		self.early_stop = 10
-
 		self.max_time = MAX_TIME
-
 		chrome_options = webdriver.ChromeOptions();
-		#chrome_options.add_argument("--headless") # the netflix extension doesn't work with headless TODO - submit issue to someone?
+		chrome_options.add_argument("--headless") # the netflix extension doesn't work with headless TODO - submit issue to someone?
 		#chrome_options.add_extension(CHROME_ADBLOCK_LOCATION) doesn't work in headless chrome
 		chrome_options.binary_location = CHROME_BINARY_LOCATION
 		chrome_options.add_argument("--window-size=2000,3555") # Needs to be big enough to get all the resolutions
+
 		caps = webdriver.common.desired_capabilities.DesiredCapabilities.CHROME
 		caps['goog:loggingPrefs'] = {'performance': 'ALL'}
-		self.driver = webdriver.Chrome(chrome_options=chrome_options, desired_capabilities=caps)
+		self.driver = webdriver.Chrome("/usr/bin/chromedriver", chrome_options=chrome_options,service_args=["--verbose","--log-path=/home/ubuntu/video_qoe_analysis/trace_generation/chrome_log.log"],desired_capabilities=caps)
 
 		# Load credentials
 		self.my_username = open('credentials/netflix_username.txt').read().strip('\n').split('\n')[0]
@@ -136,6 +135,7 @@ class Netflix_Video_Loader:
 		self.driver.quit()
 
 	def login(self):
+		time.sleep(5)
 		self.driver.get(self.login_url)
 		username = self.driver.find_element_by_id("id_userLoginId")
 		username.clear()
@@ -232,7 +232,7 @@ class Netflix_Video_Loader:
 					actions.send_keys(Keys.SPACE).perform()
 				time.sleep(np.maximum(self.pull_frequency - (time.time() - t_calls),.001))
 		except Exception as e:
-			self.driver.save_screenshot("went_wrong_{}.png".format(self._id))
+			self.save_screenshot("went_wrong_{}.png".format(self._id))
 			print(sys.exc_info())
 		finally:
 			self.shutdown()
