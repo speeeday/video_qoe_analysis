@@ -240,6 +240,7 @@ class Youtube_Video_Loader:
 					"playback_progress": video_progress,
 					"timestamp": time.time(),
 				})
+				print("Res : {} Buf health: {}".format(current_optimal_res, buffer_health))
 
 				# Check to see if video is almost done
 				if self.done_watching(tick + video_length):

@@ -113,29 +113,49 @@ class Data_Aggregator:
 				try:
 					self.bytes_transfered[0][dst_ip]
 				except KeyError:
-					self.bytes_transfered[0][dst_ip] = np.zeros(n_bins)
+					self.bytes_transfered[0][dst_ip] = {}#np.zeros(n_bins)
+				try:
+					self.bytes_transfered[0][dst_ip][source_port]
+				except KeyError:
+					self.bytes_transfered[0][dst_ip][source_port] = np.zeros(n_bins)
 				bin_of_interest = int(np.floor((ts - t_start / self.t_interval)))
-				self.bytes_transfered[0][dst_ip][bin_of_interest] += ip_pkt.len
+				self.bytes_transfered[0][dst_ip][source_port][bin_of_interest] += ip_pkt.len
 
 			elif self.is_internal(dst_ip):
 				# incoming packet
 				try:
 					self.bytes_transfered[1][src_ip]
 				except KeyError:
-					self.bytes_transfered[1][src_ip] = np.zeros(n_bins)
+					self.bytes_transfered[1][src_ip] ={}# np.zeros(n_bins)
+				try:
+					self.bytes_transfered[1][src_ip][dest_port]
+				except KeyError:
+					self.bytes_transfered[1][src_ip][dest_port] = np.zeros(n_bins)
 				bin_of_interest = int(np.floor((ts - t_start / self.t_interval)))
-				self.bytes_transfered[1][src_ip][bin_of_interest] += ip_pkt.len
+				self.bytes_transfered[1][src_ip][dest_port][bin_of_interest] += ip_pkt.len
 			else:
 				print("Neither src: {} nor dst: {} are internal...".format(src_ip, dst_ip))
 		# place all IPs into up and down, for convenience
-		all_ips = set(list(self.bytes_transfered[0].keys()) + list(self.bytes_transfered[1].keys()))
+		all_flows = []
+		for i in range(2):
+			for ip in self.bytes_transfered[i]:
+				for port in self.bytes_transfered[i][ip]:
+					try:
+						self.bytes_transfered[1-i][ip]
+					except KeyError:
+						self.bytes_transfered[1-i][ip] = {}
+					try:
+						self.bytes_transfered[1-i][ip][port]
+					except KeyError:
+						self.bytes_transfered[1-i][ip][port] = np.zeros(n_bins)
 
-		for ip in all_ips:
-			for i in [0,1]:
-				try:
-					self.bytes_transfered[i][ip]
-				except KeyError:
-					self.bytes_transfered[i][ip] = np.zeros(self.n_bins)
+		# for flow in all_ips:
+		# 	for i in [0,1]:
+		# 		try:
+		# 			self.bytes_transfered[i][ip]
+		# 		except KeyError:
+		# 			self.bytes_transfered[i][ip] = np.zeros(self.n_bins)
+		self.visualize_bit_transfers(_id)
 		pickle.dump(self.bytes_transfered, open(os.path.join(self.pcap_dir, "{}_processed.pkl".format(_id)),'wb'))
 
 	def populate_features(self, link, _id):
@@ -184,8 +204,10 @@ class Data_Aggregator:
 			bin_start = int(np.floor(self.t_start_recording_offset / self.t_interval))
 		byte_stats = np.zeros((self.n_ips, self.n_bins, 2)) # 
 		current_best_n = {} # dict with self.n_ips keys; each key is index of ip in all_ips -> row in byte_stats this flow occupies
+		all_ports = set([port for ip in self.bytes_transfered[0] for port in self.bytes_transfered[0][ip]])
 		for i in range(bin_start, self.n_bins):
-			sum_ips = np.array([sum(self.bytes_transfered[0][ip][i-self.history_length:i]) + sum(self.bytes_transfered[1][ip][i-self.history_length:i]) for ip in all_ips])
+			sum_ips = np.array([sum([sum(self.bytes_transfered[0][ip][port][i-self.history_length:i]) for port in self.bytes_transfered[0][ip]])
+			 + sum([sum(self.bytes_transfered[1][ip][port][i-self.history_length:i]) for port in self.bytes_transfered[1][ip]]) for ip in all_ips])
 			# get max n
 			try:
 				best_n = np.argpartition(sum_ips,-1*self.n_ips)[-1*self.n_ips:]
@@ -202,8 +224,8 @@ class Data_Aggregator:
 					current_best_n[add_flow] = i_of_new_flow
 
 			for ip_to_include in best_n:
-				byte_stats[current_best_n[ip_to_include]][i][0] = self.bytes_transfered[0][all_ips[ip_to_include]][i]
-				byte_stats[current_best_n[ip_to_include]][i][1] = self.bytes_transfered[1][all_ips[ip_to_include]][i]
+				byte_stats[current_best_n[ip_to_include]][i][0] = sum([self.bytes_transfered[0][all_ips[ip_to_include]][port][i] for port in self.bytes_transfered[0][all_ips[ip_to_include]]])
+				byte_stats[current_best_n[ip_to_include]][i][1] = sum([self.bytes_transfered[1][all_ips[ip_to_include]][port][i] for port in self.bytes_transfered[1][all_ips[ip_to_include]]])
 
 		self.qoe_features[_id]["byte_statistics"] = byte_stats
 
@@ -237,17 +259,36 @@ class Data_Aggregator:
 			return True
 		return False
 
-	def visualize_bit_transfers(self):
+	def visualize_bit_transfers(self, _id):
+		import matplotlib
 		import matplotlib.pyplot as plt
 		# Creates images showing bit transfers over time
-		features = pickle.load(open(os.path.join(self.save_dir, "{}-features.pkl".format(self.type)),'rb'))
-		for _id in features:
-			byte_stats_max = np.max(np.max(np.max(features[_id]["byte_statistics"])))
-			byte_stats_up = features[_id]["byte_statistics"][:,:,0] / byte_stats_max
-			byte_stats_down = features[_id]["byte_statistics"][:,:,1] / byte_stats_max
-			plt.imsave("figures/{}_up_{}.png".format(self.type,_id), byte_stats_up)
-			plt.imsave("figures/{}_down_{}.png".format(self.type,_id), byte_stats_down)
+		font = {'size'   : 6}
 
+		matplotlib.rc('font', **font)
+		ip = list(self.bytes_transfered[0].keys())[0]
+		port = list(self.bytes_transfered[0][ip].keys())[0]
+		n_bins = len(self.bytes_transfered[0][ip][port])
+		for i in range(2):
+			# up and down
+			n_ips = len(self.bytes_transfered[i])
+			ax = []
+			fig = plt.figure(figsize=(9,13))
+			for j,ip in enumerate(self.bytes_transfered[i]):
+				n_ports = len(self.bytes_transfered[i][ip])
+				transfer_arr = np.zeros((n_ports, n_bins))
+				for k, port in enumerate(self.bytes_transfered[i][ip]):
+					transfer_arr[k] = self.bytes_transfered[i][ip][port]
+				ax.append(fig.add_subplot(n_ips,1,j+1))
+				plt.imshow(transfer_arr)
+				ax[-1].set_title("IP {} , Max {} ".format(ip,np.max(np.max(transfer_arr))))
+				ax[-1].set_yticklabels(list(self.bytes_transfered[i][ip].keys()))
+			if i == 0:
+				plt.savefig("figures/{}_up_{}.pdf".format(self.type,_id))
+			else:
+				plt.savefig("figures/{}_down_{}.pdf".format(self.type,_id))
+			plt.clf()
+			plt.close()
 
 	def run_no_video(self):
 		pcaps = glob.glob(os.path.join(self.pcap_dir, "no_video_*.pcap"))

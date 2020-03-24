@@ -12,22 +12,6 @@ import numpy as np, re, csv, pickle
 
 from constants import *
 
-# Mininet libraries
-from mininet.net import Mininet
-from mininet.link import TCIntf
-from mininet.log import setLogLevel, info
-from mininet.topo import Topo
-from mininet.link import TCLink
-
-class StaticTopo(Topo):
-    "Simple topo with 1 host"
-    def build(self):
-        switch1 = self.addSwitch('s1')
-
-        "iperf server host"
-        host1 = self.addHost('h1')
-        self.addLink(host1, switch1, bw = 10000) 
-
 class Data_Gatherer:
 	def __init__(self):
 		self.n_to_collect = 10 # number of videos or sessions to visit
@@ -56,20 +40,6 @@ class Data_Gatherer:
 			cmd ="./run_data_collect.sh {}".format(_type) 
 
 		call(cmd,shell=True)
-
-		# # set up the mininet
-		# myTopo = StaticTopo()
-	 #    net = Mininet( topo=myTopo, link=TCLink )
-	 #    net.start()
-
-	 #    h1 = net.get('h1')
-	 #    intf = h1.intf()
-	 #    # call the data collection script
-	 #    h1.cmd(cmd,printPid=True)
-		# # check for need to change bandwidth
-		# # bandwidth object is array of [[time_start, time_end, max_bandwidth]]; units are seconds, seconds, Mbps
-		# # check if script is done executing
-		# # kill mininet 
 
 		call("python data_aggregator.py --mode run --type {}".format(_type), shell=True) # to prevent space problems
 
@@ -134,72 +104,74 @@ class Data_Gatherer:
 		# 	self.netflix_video_ids = np.random.choice(self.netflix_video_ids, self.n_to_collect, replace=False)
 		# for video_id in self.netflix_video_ids:
 		# 	print("Watching netflix video with id : {}".format(video_id))
-		# 	self.call_data_gather("netflix","https://www.netflix.com/watch/{}".format(video_id))
+		#	self.call_data_gather("netflix","https://www.netflix.com/watch/{}".format(video_id))
 
-		# print("-----Starting Youtube data gather.------")
-		# try:
-		# 	self.startup()
+		print("-----Starting Youtube data gather.------")
+		try:
+			self.startup()
 			
-		# 	# Youtube
-		# 	# get a list of youtube videos on the splash page
-		# 	self.driver.get("https://www.youtube.com")
-		# 	self.youtube_video_links = []
+			# Youtube
+			# get a list of youtube videos on the splash page
+			self.driver.get("https://www.youtube.com")
+			self.youtube_video_links = []
 
-		# 	# we are on the splash page, go through all the videos on the page and get the video IDs
-		# 	i = 0
-		# 	while len(self.youtube_video_links) < self.n_to_collect and i < max_n_iters:
-		# 		all_video_boxes = self.driver.find_elements_by_css_selector('a#thumbnail')
-		# 		for video_box in all_video_boxes:
-		# 			self.youtube_video_links.append(video_box.get_attribute("href"))
-		# 		self.youtube_video_links = list(set(self.youtube_video_links))
-		# 		# scroll the page down to reveal more boxes
-		# 		self.driver.execute_script("window.scrollBy(0,700)")
-		# 		i += 1
-		# except Exception as e:
-		# 	print(sys.exc_info())
-		# finally:
-		# 	self.shutdown()
+			# we are on the splash page, go through all the videos on the page and get the video IDs
+			i = 0
+			while len(self.youtube_video_links) < self.n_to_collect and i < max_n_iters:
+				all_video_boxes = self.driver.find_elements_by_css_selector('a#thumbnail')
+				for video_box in all_video_boxes:
+					self.youtube_video_links.append(video_box.get_attribute("href"))
+				self.youtube_video_links = list(set(self.youtube_video_links))
+				# scroll the page down to reveal more boxes
+				self.driver.execute_script("window.scrollBy(0,700)")
+				i += 1
+		except Exception as e:
+			print(sys.exc_info())
+		finally:
+			self.shutdown()
 		
-		# # Now gather stats about each of these
-		# self.youtube_video_links = [el for el in self.youtube_video_links if el]
-		# if len(self.youtube_video_links) > self.n_to_collect:
-		# 	self.youtube_video_links = np.random.choice(self.youtube_video_links, self.n_to_collect, replace=False)
-		# for video_link in self.youtube_video_links:
-		# 	print("Conducting data gather for video : {}".format(video_link))
-		# 	self.call_data_gather("youtube", video_link)
+		# Now gather stats about each of these
+		self.youtube_video_links = [el for el in self.youtube_video_links if el]
+		if len(self.youtube_video_links) > self.n_to_collect:
+			self.youtube_video_links = np.random.choice(self.youtube_video_links, self.n_to_collect, replace=False)
+		for video_link in self.youtube_video_links:
+			print("Conducting data gather for video : {}".format(video_link))
+			self.call_data_gather("youtube", video_link)
 
-		# print("-----Starting Twitch data gather.------")
-		# try:
-		# 	self.startup()
-		# 	# Twitch
-		# 	# get a list of popular, live channels
-		# 	self.driver.get("https://www.twitch.tv/directory/all")
-		# 	self.twitch_profiles = []
+		print("-----Starting Twitch data gather.------")
+		try:
+			self.startup()
+			# Twitch
+			# get a list of popular, live channels
+			self.driver.get("https://www.twitch.tv/directory/all")
+			self.twitch_profiles = []
 
-		# 	# we are on the splash page, go through all the channels on the page and get the profile names
-		# 	i = 0
-		# 	while len(self.twitch_profiles) < self.n_to_collect and i < max_n_iters:
-		# 		all_video_boxes = self.driver.find_elements_by_css_selector('.tw-mg-b-2 .preview-card .preview-card-titles__subtitle-wrapper p > a')
-		# 		for video_box in all_video_boxes:
-		# 			if "directory" not in video_box.get_attribute('href'): # this is a link to a general game directory
-		# 				# TODO - check to make sure the channel name is unicode (not foreign)
-		# 				self.twitch_profiles.append(video_box.text)
-		# 		self.twitch_profiles = list(set(self.twitch_profiles))
-		# 		# scroll the page down to reveal more boxes
-		# 		self.driver.execute_script("window.scrollBy(0,700)")
-		# 		i += 1
-		# except Exception as e:
-		# 	print(sys.exc_info())
-		# finally:
-			# self.shutdown()
+			# we are on the splash page, go through all the channels on the page and get the profile names
+			i = 0
+			while len(self.twitch_profiles) < self.n_to_collect and i < max_n_iters:
+				all_video_boxes = self.driver.find_elements_by_css_selector('div.tw-flex-grow-1.tw-flex-shrink-1.tw-full-width.tw-item-order-2.tw-media-card-meta__text-container\
+				 > div.tw-media-card-meta__links > div:nth-child(1) > p > a')
+				for video_box in all_video_boxes:
+					if "directory" not in video_box.get_attribute('href'): # this is a link to a general game directory
+						# TODO - check to make sure the channel name is unicode (not foreign)
+						self.twitch_profiles.append(video_box.text)
+				self.twitch_profiles = list(set(self.twitch_profiles))
+				# scroll the page down to reveal more boxes
+				self.driver.execute_script("window.scrollBy(0,700)")
+				i += 1
+		except Exception as e:
+			print(sys.exc_info())
+		finally:
+			self.shutdown()
 
-		# now gather stats about each of these
-		# self.twitch_profiles = [el for el in self.twitch_profiles if el]
-		# if len(self.twitch_profiles) > self.n_to_collect:
-		# 	self.twitch_profiles = np.random.choice(self.twitch_profiles, self.n_to_collect, replace=False)
-		# for twitch_profile in self.twitch_profiles:
-		# 	print("Watching stream of profile : {}".format(twitch_profile))
-		# 	self.call_data_gather("twitch", "https://www.twitch.tv/{}".format(twitch_profile))
+		## now gather stats about each of these
+		print(self.twitch_profiles)
+		self.twitch_profiles = [el for el in self.twitch_profiles if el]
+		if len(self.twitch_profiles) > self.n_to_collect:
+			self.twitch_profiles = np.random.choice(self.twitch_profiles, self.n_to_collect, replace=False)
+		for twitch_profile in self.twitch_profiles:
+			print("Watching stream of profile : {}".format(twitch_profile))
+			self.call_data_gather("twitch", "https://www.twitch.tv/{}".format(twitch_profile))
 
 		print("-----Starting no video data gather.------")
 		# No video

@@ -10,3 +10,7 @@ trace_generation/minimal.py
 venv
 trace_generation/logs
 *.mp4
+*.pdf
+*.pkl
+*.png
+*.log

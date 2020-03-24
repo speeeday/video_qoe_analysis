@@ -51,7 +51,7 @@ class SingleSwitchTopo(Topo):
         switch = self.addSwitch('s1')
         switch2 = self.addSwitch('s2')
         
-        for h in xrange(n):
+        for h in range(n):
             host = self.addHost('h%d' % (h + 1))
             self.addLink(host, switch2)
             self.host_objects.append(host)
@@ -87,6 +87,7 @@ def main():
     # this is where you can modify how you want the clients to access the videos, for example if you want to induce a delay between when 1 client starts the stream versus the other, OR if you want to change the streaming services between different clients that can all be modified here
     
     client = net.get(topo.host_objects[0])
+    print(client.cmd("dig google.com"))
 
     video_url = args.link
 
@@ -113,7 +114,7 @@ def main():
    
     ### EXPERIMENT CODE END   ###
     
-    print "Done !"
+    print("Done !")
     # Hang on the CLI before we exit manually
 
     CLI( net )

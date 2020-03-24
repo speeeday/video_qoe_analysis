@@ -79,7 +79,7 @@ import numpy as np, re, csv, pickle
 
 from constants import *
 
-# Usage: python youtube_video.py --link [video link]
+# Usage: python netflix_video.py --link [video link]
 #
 # Make sure to provide the video link within quotes "" via the command
 # line because the link often contains shell characters in it
@@ -92,14 +92,14 @@ class Netflix_Video_Loader:
 		self.early_stop = 10
 		self.max_time = MAX_TIME
 		chrome_options = webdriver.ChromeOptions();
-		chrome_options.add_argument("--headless") # the netflix extension doesn't work with headless TODO - submit issue to someone?
+		#chrome_options.add_argument("--headless") # the netflix extension doesn't work with headless TODO - submit issue to someone?, get firefox working?
 		#chrome_options.add_extension(CHROME_ADBLOCK_LOCATION) doesn't work in headless chrome
 		chrome_options.binary_location = CHROME_BINARY_LOCATION
 		chrome_options.add_argument("--window-size=2000,3555") # Needs to be big enough to get all the resolutions
 
 		caps = webdriver.common.desired_capabilities.DesiredCapabilities.CHROME
 		caps['goog:loggingPrefs'] = {'performance': 'ALL'}
-		self.driver = webdriver.Chrome("/usr/bin/chromedriver", chrome_options=chrome_options,service_args=["--verbose","--log-path=/home/ubuntu/video_qoe_analysis/trace_generation/chrome_log.log"],desired_capabilities=caps)
+		self.driver = webdriver.Chrome(chrome_options=chrome_options,service_args=["--verbose","--log-path=/home/ubuntu/video_qoe_analysis/trace_generation/chrome_log.log"],desired_capabilities=caps)
 
 		# Load credentials
 		self.my_username = open('credentials/netflix_username.txt').read().strip('\n').split('\n')[0]
