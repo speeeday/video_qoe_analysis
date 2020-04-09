@@ -83,16 +83,22 @@ class Twitch_Video_Loader:
 	def get_rid_of_ads(self):
 		# You can't skip ads in twitch, so just wait until they go away
 		t_start = time.time()
+		refreshed = False
 		while True:
 			try:
-				if "Hosting" in self.driver.find_element_by_css_selector("span.tw-c-text-overlay").text:
+				title_text = self.driver.find_element_by_css_selector("span.tw-c-text-overlay").text
+				if "Hosting" in title_text:
 					# stream has ended
 					print("Note -- this stream is over and the user is hosting someone else.")
+					return True
+				if "Squad" in title_text:
+					print("Note -- this user is squad streaming with others.")
 					return True
 				time.sleep(1)
 				if time.time() - t_start > self.max_ad_wait_interval:
 					print("Note -- max ad wait interval hit... refreshing")
 					self.save_screenshot("waiting_for_ads.png")
+					refreshed = True
 					# some non-conforming page probably
 					return False
 			except:
@@ -291,6 +297,8 @@ class Twitch_Video_Loader:
 						fps = 0
 						bitrate = self.driver.find_element_by_css_selector(find_str + " tr:nth-child({}) > td:nth-child(2) > p".format(7)).text
 						bitrate = int(re.search(bitrate_search_str, bitrate).group(1))
+					print("Res : {} Buf health: {} state: {}".format(
+						current_optimal_res, buffer_health, state))
 
 					self.video_statistics[link]["stats"].append({
 						"current_optimal_res": current_optimal_res,

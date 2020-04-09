@@ -1,8 +1,13 @@
 CHROME_BINARY_LOCATION = "/usr/bin/google-chrome"
 CHROME_ADBLOCK_LOCATION= "/home/ec2-user/Downloads/extension_3_7_0_0.crx" # note - couldn't get this to work
+FIREFOX_BINARY_LOCATION = "/usr/bin/firefox"
+FIREFOX_PROFILE_LOCATION = "./profiles"
 ERROR_REPORT_DIR = "./error_reports"
 METADATA_DIR = "./metadata"
 KNOWN_IP_LIST_FN = "known_ips.pkl"
+TRACES_DIR = "./throughput_traces/traces"
+PCAP_DIR = "./pcaps"
+LOG_DIR = "./logs"
 
 # IPs internal to the observed network
 INTERNAL_IPS = ["172.31.30.176"]

@@ -8,3 +8,4 @@ http_archives
 *.pcap
 screenlog*
 error_reports/*
+profiles

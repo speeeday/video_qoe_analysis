@@ -1,6 +1,8 @@
 import numpy as np, os, glob, pickle, dpkt, re, csv, socket
 from subprocess import call
 import geoip2.database
+import matplotlib
+import matplotlib.pyplot as plt
 
 from constants import *
 from helpers import *
@@ -28,6 +30,8 @@ class Data_Aggregator:
 		self.qoe_features = {}
 
 		self.append = True # whether or not we should append the aggregated features to the current features files or not
+		self.stats_panel_info = None
+		self.t_start_recording_offset = 0
 
 	def cleanup_files(self):
 		# removes log files, pcaps, as they are no longer useful
@@ -205,6 +209,8 @@ class Data_Aggregator:
 		byte_stats = np.zeros((self.n_ips, self.n_bins, 2)) # 
 		current_best_n = {} # dict with self.n_ips keys; each key is index of ip in all_ips -> row in byte_stats this flow occupies
 		all_ports = set([port for ip in self.bytes_transfered[0] for port in self.bytes_transfered[0][ip]])
+
+		# NOTE - I effectively zero-out all packet transfers up to the point where I start recording statistics
 		for i in range(bin_start, self.n_bins):
 			sum_ips = np.array([sum([sum(self.bytes_transfered[0][ip][port][i-self.history_length:i]) for port in self.bytes_transfered[0][ip]])
 			 + sum([sum(self.bytes_transfered[1][ip][port][i-self.history_length:i]) for port in self.bytes_transfered[1][ip]]) for ip in all_ips])
@@ -260,8 +266,6 @@ class Data_Aggregator:
 		return False
 
 	def visualize_bit_transfers(self, _id):
-		import matplotlib
-		import matplotlib.pyplot as plt
 		# Creates images showing bit transfers over time
 		font = {'size'   : 6}
 
@@ -273,7 +277,11 @@ class Data_Aggregator:
 			# up and down
 			n_ips = len(self.bytes_transfered[i])
 			ax = []
-			fig = plt.figure(figsize=(9,13))
+			try:
+				fig = plt.figure(figsize=(9,13))
+			except:
+				# doesn't work when running via screen
+				return
 			for j,ip in enumerate(self.bytes_transfered[i]):
 				n_ports = len(self.bytes_transfered[i][ip])
 				transfer_arr = np.zeros((n_ports, n_bins))

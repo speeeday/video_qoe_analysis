@@ -4,30 +4,45 @@
 
 from selenium import webdriver
 from selenium import common
-import sys
-import time, json
-import os
-from subprocess import call, check_output
+import time, json, signal,os,sys
+from subprocess import call, check_output, Popen
 import numpy as np, re, csv, pickle
 
 from constants import *
 
 class Data_Gatherer:
 	def __init__(self):
-		self.n_to_collect = 10 # number of videos or sessions to visit
+		self.n_to_collect = 30 # number of videos or sessions to visit
 		# Load credentials
 		self.netflix_login_url = "https://www.netflix.com/login"
 		self.netflix_username = open('credentials/netflix_username.txt').read().strip('\n').split('\n')[0]
 		self.netflix_password = open('credentials/netflix_password.txt').read().strip('\n').split('\n')[0]
 
-	def startup(self):
-		chrome_options = webdriver.ChromeOptions();
-		chrome_options.add_argument("--headless")
-		chrome_options.binary_location = CHROME_BINARY_LOCATION
-		chrome_options.add_argument("--window-size=2000,3555") # Needs to be big enough to get all the resolutions
-		caps = webdriver.common.desired_capabilities.DesiredCapabilities.CHROME
-		caps['goog:loggingPrefs'] = {'performance': 'ALL'}
-		self.driver = webdriver.Chrome(chrome_options=chrome_options, desired_capabilities=caps)
+		self.clean_before = True
+		if self.clean_before:
+			# clear away all outstanding logs and pcaps which are likely there from either
+			# failed runs or testing
+			call("rm {}/*.pcap".format(PCAP_DIR), shell=True)
+			call("rm {}/*".format(LOG_DIR), shell=True)
+
+	def startup(self, chrome=True):
+		if chrome:
+			chrome_options = webdriver.ChromeOptions();
+			chrome_options.add_argument("--headless")
+			chrome_options.binary_location = CHROME_BINARY_LOCATION
+			chrome_options.add_argument("--window-size=2000,3555") # Needs to be big enough to get all the resolutions
+			caps = webdriver.common.desired_capabilities.DesiredCapabilities.CHROME
+			caps['goog:loggingPrefs'] = {'performance': 'ALL'}
+			self.driver = webdriver.Chrome(chrome_options=chrome_options, desired_capabilities=caps)
+		else:
+			firefox_options = webdriver.firefox.options.Options()
+			prof = webdriver.firefox.firefox_profile.FirefoxProfile(FIREFOX_PROFILE_LOCATION)
+			firefox_options.add_argument("--headless")
+			firefox_options.binary_location = FIREFOX_BINARY_LOCATION
+			firefox_options.add_argument("--window-size=2000,3555")
+			self.driver = webdriver.Firefox(prof, options=firefox_options)
+		# Make sure there are no outstanding rules, or we will get errors
+		call("tcdel ens5 --all",shell=True)
 
 	def shutdown(self):
 		# kill the browser instance
@@ -39,26 +54,44 @@ class Data_Gatherer:
 		else:
 			cmd ="./run_data_collect.sh {}".format(_type) 
 
-		call(cmd,shell=True)
-
-		call("python data_aggregator.py --mode run --type {}".format(_type), shell=True) # to prevent space problems
+		# set up traffic control
+		p = Popen("python limit_throughput.py &", shell=True, preexec_fn=os.setsid)
+		# watch the video
+		call(cmd, shell=True)
+		# Kill traffic control, and delete rules
+		os.killpg(os.getpgid(p.pid), signal.SIGTERM)
+		call("tcdel ens5 --all", shell=True)
+		# to prevent space problems, aggregate after each run
+		call("python data_aggregator.py --mode run --type {}".format(
+			_type), shell=True) 
 
 	def netflix_login(self):
 		self.driver.get(self.netflix_login_url)
-		username = self.driver.find_element_by_id("id_userLoginId")
-		username.clear()
-		username.send_keys(self.netflix_username)
+		self.driver.save_screenshot("nflx_load.png")
+		try:
+			username = self.driver.find_element_by_id("id_userLoginId")
+			username.clear()
+			username.send_keys(self.netflix_username)
 
-		password = self.driver.find_element_by_id("id_password")
-		password.clear()
-		password.send_keys(self.netflix_password)
-		self.driver.find_element_by_class_name("btn-submit").click()
+			password = self.driver.find_element_by_id("id_password")
+			password.clear()
+			password.send_keys(self.netflix_password)
+			self.driver.find_element_by_class_name("btn-submit").click()
+		except:
+			# already logged in
+			# see if we need to select the profile icon
+			try:
+				print("Selecting my profile")
+				self.driver.find_elements_by_class_name("profile-icon")[NETFLIX_PROFILE_INDEX].click()
+				return
+			except:
+				return
 		while True: #wait for the page to load
 			try:
 				self.driver.find_elements_by_class_name("profile-icon")[NETFLIX_PROFILE_INDEX].click()
 				break
 			except:
-				self.driver.save_screenshot("went_wrong.png")
+				self.driver.save_screenshot("cant_click_profile.png")
 				time.sleep(1)
 
 	def run(self):
@@ -69,7 +102,7 @@ class Data_Gatherer:
 
 		# print("-----Starting Netflix data gather.------")
 		# try: # lots of things can go wrong in this loop TODO - report errors 
-		# 	self.startup()
+		# 	self.startup(chrome=False)
 		# 	# Netflix
 		# 	# get a list of the n most popular netflix videos 
 		# 	self.netflix_login()
@@ -93,6 +126,7 @@ class Data_Gatherer:
 		# 		print("Up to {} netflix video ids.".format(len(self.netflix_video_ids)))
 		# 		# scroll the page down to reveal more boxes
 		# 		self.driver.execute_script("window.scrollBy(0,700)")
+		# 		time.sleep(1)
 		# 		i += 1
 		# except Exception as e:
 		# 	print(sys.exc_info())
@@ -104,7 +138,7 @@ class Data_Gatherer:
 		# 	self.netflix_video_ids = np.random.choice(self.netflix_video_ids, self.n_to_collect, replace=False)
 		# for video_id in self.netflix_video_ids:
 		# 	print("Watching netflix video with id : {}".format(video_id))
-		#	self.call_data_gather("netflix","https://www.netflix.com/watch/{}".format(video_id))
+		# 	self.call_data_gather("netflix","https://www.netflix.com/watch/{}".format(video_id))
 
 		print("-----Starting Youtube data gather.------")
 		try:
@@ -132,6 +166,18 @@ class Data_Gatherer:
 		
 		# Now gather stats about each of these
 		self.youtube_video_links = [el for el in self.youtube_video_links if el]
+		# there is a chance one of these may not be a valid youtube link, filter out imposters
+		to_del = []
+		for i, link in enumerate(self.youtube_video_links):
+			try:
+				re.search("https\:\/\/www\.youtube\.com\/watch\?v\=(.+)", link).group(1)
+			except:
+				# not a valid link
+				to_del.append(i)
+
+		for i in sorted(to_del, reverse=True):
+			del self.youtube_video_links[i]
+
 		if len(self.youtube_video_links) > self.n_to_collect:
 			self.youtube_video_links = np.random.choice(self.youtube_video_links, self.n_to_collect, replace=False)
 		for video_link in self.youtube_video_links:
@@ -179,9 +225,6 @@ class Data_Gatherer:
 			self.call_data_gather("no_video")
 
 def main():
-	import argparse
-	parser = argparse.ArgumentParser()
-
 	dg = Data_Gatherer()
 	dg.run()
 

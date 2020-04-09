@@ -91,15 +91,25 @@ class Netflix_Video_Loader:
 		self.pull_frequency = .5 # how often to look at stats for nerds box (seconds)
 		self.early_stop = 10
 		self.max_time = MAX_TIME
-		chrome_options = webdriver.ChromeOptions();
-		#chrome_options.add_argument("--headless") # the netflix extension doesn't work with headless TODO - submit issue to someone?, get firefox working?
-		#chrome_options.add_extension(CHROME_ADBLOCK_LOCATION) doesn't work in headless chrome
-		chrome_options.binary_location = CHROME_BINARY_LOCATION
-		chrome_options.add_argument("--window-size=2000,3555") # Needs to be big enough to get all the resolutions
+		chrome = False
+		if chrome:
+			chrome_options = webdriver.ChromeOptions()
+			#chrome_options.add_argument("--headless") # the netflix extension doesn't work with headless TODO - submit issue to someone?, get firefox working?
+			#chrome_options.add_extension(CHROME_ADBLOCK_LOCATION) doesn't work in headless chrome
+			chrome_options.binary_location = CHROME_BINARY_LOCATION
+			chrome_options.add_argument("--window-size=2000,3555") # Needs to be big enough to get all the resolutions
 
-		caps = webdriver.common.desired_capabilities.DesiredCapabilities.CHROME
-		caps['goog:loggingPrefs'] = {'performance': 'ALL'}
-		self.driver = webdriver.Chrome(chrome_options=chrome_options,service_args=["--verbose","--log-path=/home/ubuntu/video_qoe_analysis/trace_generation/chrome_log.log"],desired_capabilities=caps)
+			caps = webdriver.common.desired_capabilities.DesiredCapabilities.CHROME
+			caps['goog:loggingPrefs'] = {'performance': 'ALL'}
+			self.driver = webdriver.Chrome(chrome_options=chrome_options,service_args=["--verbose","--log-path=/home/ubuntu/video_qoe_analysis/trace_generation/chrome_log.log"],desired_capabilities=caps)
+		else:
+			# firefox
+			firefox_options = webdriver.firefox.options.Options()
+			prof = webdriver.firefox.firefox_profile.FirefoxProfile(FIREFOX_PROFILE_LOCATION)
+			firefox_options.add_argument("--headless")
+			firefox_options.binary_location = FIREFOX_BINARY_LOCATION
+			firefox_options.add_argument("--window-size=2000,3555")
+			self.driver = webdriver.Firefox(prof, options=firefox_options)
 
 		# Load credentials
 		self.my_username = open('credentials/netflix_username.txt').read().strip('\n').split('\n')[0]
@@ -137,7 +147,12 @@ class Netflix_Video_Loader:
 	def login(self):
 		time.sleep(5)
 		self.driver.get(self.login_url)
-		username = self.driver.find_element_by_id("id_userLoginId")
+		print("Logging in..")
+		try:
+			username = self.driver.find_element_by_id("id_userLoginId")
+		except:
+			print("Already logged in, returning.")
+			return
 		username.clear()
 		username.send_keys(self.my_username)
 
@@ -170,6 +185,7 @@ class Netflix_Video_Loader:
 			self.login()
 
 			self.driver.get(link)
+
 			t_since_last_fetched = time.time()
 			while self.driver.current_url != link:
 				if time.time() - t_since_last_fetched > 10:
@@ -180,8 +196,10 @@ class Netflix_Video_Loader:
 				time.sleep(1)
 
 			#t_since_last_fetched = time.time()
+			n_tries = 0
 			while True: # wait for page to load
 				try:
+					n_tries += 1
 					player = self.driver.find_element_by_css_selector(".VideoContainer")
 					break
 				except:
@@ -190,18 +208,23 @@ class Netflix_Video_Loader:
 					# 	print("Fetching again")
 					# 	self.driver.get(link)
 					# 	t_since_last_fetched = time.time()
+					self.save_screenshot("video_container_wait.png")
 					time.sleep(1)
-			# video auto-plays
-			tick=time.time()
-			self.video_statistics[link]["metadata"]["start_wait"] = tick - self.t_initialize
-
-			# open up the stats panel
+					if n_tries > 10:
+						print("Maximum number of tries reached, exiting.")
+						return
+			# start video
 			from selenium.webdriver.common.keys import Keys
+			# open up the stats panel
 			actions = webdriver.common.action_chains.ActionChains(self.driver)
 			print("Sending keys")
-			actions.key_down(Keys.ALT).key_down(Keys.CONTROL).key_down(Keys.SHIFT).send_keys("d").key_up(Keys.ALT).key_up(Keys.SHIFT).key_up(Keys.CONTROL).perform();
-			
+			actions.key_down(Keys.ALT).key_down(Keys.CONTROL).key_down(Keys.SHIFT).send_keys("q").key_up(Keys.ALT).key_up(Keys.SHIFT).key_up(Keys.CONTROL).perform();
+			time.sleep(5)
+			# actions = webdriver.common.action_chains.ActionChains(self.driver)
+			# actions.send_keys(Keys.SPACE).perform()
 			print("Going through stats for nerds")
+			tick=time.time()
+			self.video_statistics[link]["metadata"]["start_wait"] = tick - self.t_initialize
 			# pull data from stats for nerds with whatever frequency you want
 			stop = False
 			video_length = None
@@ -223,6 +246,8 @@ class Netflix_Video_Loader:
 					"playback_progress": video_progress,
 					"timestamp": time.time(),
 				})
+				print("Res : {} Buf health: {} plbck progress: {}".format(
+					current_optimal_res, buffer_health, video_progress))
 
 				# Check to see if video is almost done
 				if self.done_watching(tick + video_length):

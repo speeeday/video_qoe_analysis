@@ -20,6 +20,9 @@ class Youtube_Video_Loader:
 		self.t_initialize = time.time()
 		self.pull_frequency = .5 # how often to look at stats for nerds box (seconds)
 		self.early_stop = 10 # how long before the end of the video to stop (seconds)
+		# how many consecutive iterations of the same video progress before we declare an error
+		# TODO - remove
+		self.max_pb_ctr_allowance = 10 
 
 		self.max_time = MAX_TIME
 
@@ -185,7 +188,7 @@ class Youtube_Video_Loader:
 			actions.context_click(player) 
 			actions.perform()
 			# click on stats for nerds
-			self.driver.find_element_by_xpath('/html/body/div[3]/div/div/div[6]/div[2]').click()
+			self.driver.find_element_by_css_selector('div:nth-child(7) > div.ytp-menuitem-label').click()
 			# Find the statistics
 			stats_for_nerds_i = None
 			for i in range(50):
@@ -217,6 +220,7 @@ class Youtube_Video_Loader:
 			print("Going through stats for nerds")
 			# pull data from stats for nerds with whatever frequency you want
 			stop = False
+			last_playback_progress, no_pb_progress_ctr = None, 0
 			while not stop:
 				# get video progress
 				# Note - this reading process can take a while, so sleeping is not necessarily advised
@@ -240,7 +244,19 @@ class Youtube_Video_Loader:
 					"playback_progress": video_progress,
 					"timestamp": time.time(),
 				})
-				print("Res : {} Buf health: {}".format(current_optimal_res, buffer_health))
+				print("Res : {} Buf health: {} plbck progress: {}".format(
+					current_optimal_res, buffer_health, video_progress))
+				if last_playback_progress:
+					if video_progress == last_playback_progress:
+						no_pb_progress_ctr += 1
+					else:
+						no_pb_progress_ctr = 0
+					if no_pb_progress_ctr > self.max_pb_ctr_allowance:
+						self.save_screenshot("not_progressing_{}_youtube.png".format(self._id))
+						player.click()
+						no_pb_progress_ctr = 0
+				last_playback_progress = video_progress
+
 
 				# Check to see if video is almost done
 				if self.done_watching(tick + video_length):
