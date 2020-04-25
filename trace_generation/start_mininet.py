@@ -52,7 +52,7 @@ class SingleSwitchTopo(Topo):
         switch2 = self.addSwitch('s2')
         
         for h in range(n):
-            host = self.addHost('h%d' % (h + 1))
+            host = self.addHost('h%d' % (h + 1),ip ='10.0.0.254')
             self.addLink(host, switch2)
             self.host_objects.append(host)
             
@@ -79,23 +79,21 @@ def main():
 
 
 #    raw_input()
+    os.system('sudo touch {}'.format(outfile))
+    os.system('sudo chmod 777 {}'.format(outfile))
     os.system('sudo dumpcap -i s1-eth1 -w {} &'.format(outfile))
     sleep(3)
     
     ### EXPERIMENT CODE START ###
 
-    # this is where you can modify how you want the clients to access the videos, for example if you want to induce a delay between when 1 client starts the stream versus the other, OR if you want to change the streaming services between different clients that can all be modified here
-    
+    # this is where you can modify how you want the clients to access the videos, for example if you want to induce a delay between when 1 client starts the stream versus the other, OR if you want to change the streaming services between different clients that can all be modified here 
     client = net.get(topo.host_objects[0])
-    print(client.cmd("dig google.com"))
-
     video_url = args.link
 
     ssl_key_dir = '/home/sj/research/video_qoe_analysis/trace_generation/ssl_keys/'
     
 #    client.cmd('export SSLKEYLOGFILE=' + ssl_key_dir + args.pcap_name.split('/')[1].split('.')[0] + '-ssl_key.log')
-
-#    client.cmd('su - sj')
+   # client.cmd('su - sj')
 #    client.cmd('firefox {} &'.format(video_url))
 #    client.cmd('chromium-browser --no-sandbox --ignore-certificate-errors --user-data-dir=/tmp/nonexistent$(date +%s%N) {} &'.format(video_url))    
 
@@ -110,14 +108,18 @@ def main():
 
 
    # open a window on h1 to run experiment manually (until sslkeylogfile can be automated)
-    client.cmd('xterm')
+    #info(client.cmd('bash bscript.sh'))
+    print("Start sending command")
+    #info(client.cmd("python switchuser.py nillin zzz / --norc&"))
+    info(client.cmd("python3 testscript.py &"))
+    info(client.cmd('xterm'))
    
     ### EXPERIMENT CODE END   ###
     
     print("Done !")
     # Hang on the CLI before we exit manually
 
-    CLI( net )
+    cli = CLI( net)
     net.stop()
 
 if __name__ == '__main__':
