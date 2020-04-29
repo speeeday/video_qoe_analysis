@@ -15,28 +15,28 @@ import os
 #    credentials/netflix_password.txt - password for the valid netflix subscription
 opts = Options()
 opts.log.level = "trace"
-#executable_path = './geckodriver'
+executable_path = './geckodriver'
 # create a new firefox session
-#driver = webdriver.Firefox(executable_path=executable_path,options = opts)
-#driver.implicitly_wait(30)
-#driver.maximize_window()
+driver = webdriver.Firefox(executable_path=executable_path,options = opts)
+driver.implicitly_wait(30)
+driver.maximize_window()
 
 #driver.get("https://www.youtube.com")
 #assert "YouTube" in driver.title
 
 #print (driver.current_url)
 #sys.exit()
-
-driver = webdriver.Chrome(executable_path = './chromedriver',service_args=["--verbose","--log-path=./chromedriver.log"])
-print("test2")
-driver.get("https://www.youtube.com/")
-print("test3")
-assert "YouTube" in driver.title
+#chrome_options = webdriver.ChromeOptions()
+#chrome_options.add_argument('--no-sandbox')
+#driver = webdriver.Chrome(executable_path = './chromedriver',service_args=["--verbose","--log-path=./chromedriver.log"])
+#driver = webdriver.Chrome(executable_path='./chromedriver')
+#driver.get("www.youtube.com")
+#assert "YouTube" in driver.title
 
 #print driver.current_url
 #sys.exit()
 
-os.system('./preserve_logs.sh')
+#os.system('./preserve_logs.sh')
 time.sleep(2)
 
 if len(sys.argv) > 1:
@@ -44,7 +44,7 @@ if len(sys.argv) > 1:
 else:
     link = "https://www.youtube.com/watch?v=_qyw6LC5pnE" # place video link here
 
-print "[INFO]: Starting Youtube Video at link: {}".format(link)
+print ("[INFO]: Starting Youtube Video at link: {}".format(link))
 driver.get(link)
     
 DISCONNECTED_MSG = 'Unable to evaluate script: disconnected: not connected to DevTools\n'
@@ -54,6 +54,6 @@ while True:
 #    print len(driver_log)
     if driver_log != []:
         if driver_log[-1]['message'] == DISCONNECTED_MSG:
-            print 'Browser window closed by user'
+            print ('Browser window closed by user')
             break
     time.sleep(1)

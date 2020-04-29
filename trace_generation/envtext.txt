@@ -1,6 +1,3 @@
-/home/nillin/video_qoe_analysis
+/home/sj/research/video_qoe_analysis/trace_generation/ssl_keys/s2-eth2-ssl_key.log
 nillin
-/home/nillin/video_qoe_analysis
-nillin
-/home/nillin/video_qoe_analysis
-nillin
+end of script

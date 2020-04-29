@@ -110,9 +110,10 @@ def main():
    # open a window on h1 to run experiment manually (until sslkeylogfile can be automated)
     #info(client.cmd('bash bscript.sh'))
     print("Start sending command")
+    info(client.cmd("dig www.google.com"))
     #info(client.cmd("python switchuser.py nillin zzz / --norc&"))
     info(client.cmd("python3 testscript.py &"))
-    info(client.cmd('xterm'))
+    #info(client.cmd('xterm'))
    
     ### EXPERIMENT CODE END   ###
     
