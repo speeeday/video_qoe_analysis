@@ -221,20 +221,27 @@ class Youtube_Video_Loader:
 			# pull data from stats for nerds with whatever frequency you want
 			stop = False
 			last_playback_progress, no_pb_progress_ctr = None, 0
+			find_str = '//*[@id="movie_player"]/div[{}]'.format(stats_for_nerds_i)
+			vsl = self.driver.find_element_by_xpath(find_str)
 			while not stop:
 				# get video progress
 				# Note - this reading process can take a while, so sleeping is not necessarily advised
 				t_calls = time.time()
-				viewport_frames = self.driver.find_element_by_xpath('//*[@id="movie_player"]/div[{}]/div/div[2]/span'.format(stats_for_nerds_i)).text
-				current_optimal_res = self.driver.find_element_by_xpath('//*[@id="movie_player"]/div[{}]/div/div[3]/span'.format(stats_for_nerds_i)).text
-				buffer_health = self.driver.find_element_by_xpath('//*[@id="movie_player"]/div[{}]/div/div[11]/span/span[2]'.format(stats_for_nerds_i)).text
-				mystery_text = self.driver.find_element_by_xpath('//*[@id="movie_player"]/div[{}]/div/div[15]/span'.format(stats_for_nerds_i)).text
-				mtext_re = re.search("s:(.+) t:(.+) b:(.+)-(.+)", mystery_text)
+				video_stats_text = vsl.get_attribute("textContent")
+				video_stats_re = re.search("\[x\]Video ID (.+)Viewport \/ Frames(.+) Optimal Res(.+)Volume(.+)Codecs(.+)Connection Speed(.+) KbpsNetwork Activity(.+) KBBuffer Health(.+) sLive LatencyLive ModePlayback CategoriesMystery Texts:(.+) t\:(.+) b",video_stats_text)
+				if video_stats_re:
+					viewport_frames = video_stats_re.group(2)
+					current_optimal_res = video_stats_re.group(3)
+					buffer_health = float(video_stats_re.group(8))
+					mystery_text = video_stats_re.group(9)
+				else:
+					time.sleep(.5)
+					print("Didn't match regex: {}".format(video_stats_text))
 				try:
-					state = int(mtext_re.group(1)) # 4 -> paused, 5 -> paused&out of buffer, 8 -> playing, 9 -> rebuffering
+					state = int(mystery_text) # 4 -> paused, 5 -> paused&out of buffer, 8 -> playing, 9 -> rebuffering
 				except ValueError:
-					state = mtext_re.group(1) # c44->?
-				video_progress = float(mtext_re.group(2))
+					state = mystery_text # c44->?
+				video_progress = float(video_stats_re.group(10))
 
 				self.video_statistics[link]["stats"].append({
 					"viewport_frames": viewport_frames,
@@ -244,8 +251,9 @@ class Youtube_Video_Loader:
 					"playback_progress": video_progress,
 					"timestamp": time.time(),
 				})
-				print("Res : {} Buf health: {} plbck progress: {}".format(
-					current_optimal_res, buffer_health, video_progress))
+				if np.random.random() > .8:
+					print("Res : {} Buf health: {} plbck progress: {}".format(
+						current_optimal_res, buffer_health, video_progress))
 				if last_playback_progress:
 					if video_progress == last_playback_progress:
 						no_pb_progress_ctr += 1
@@ -263,7 +271,6 @@ class Youtube_Video_Loader:
 					stop = True
 					player.click() # stop the video
 				time.sleep(np.maximum(self.pull_frequency - (time.time() - t_calls),.001))
-
 			
 
 		except Exception as e:

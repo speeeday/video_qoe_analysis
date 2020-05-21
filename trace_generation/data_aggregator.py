@@ -1,5 +1,5 @@
-import numpy as np, os, glob, pickle, dpkt, re, csv, socket
-from subprocess import call
+import numpy as np, os, glob, pickle, dpkt, re, csv, socket, json
+from subprocess import call, check_output
 import geoip2.database
 import matplotlib
 import matplotlib.pyplot as plt
@@ -48,6 +48,9 @@ class Data_Aggregator:
 		"""Loads capture statistics and pcaps for a video."""
 		# load advanced panel statistics
 		if self.type != "no_video":
+			# per-flow video classifier feature creator
+			self.per_flow_video_classifier(_id)
+
 			stats_file = os.path.join(self.log_dir, "{}_stats_log_{}-{}-stats.csv".format(self.type,_id,link))
 			stats = []
 			with open(stats_file, 'r') as f:
@@ -63,7 +66,8 @@ class Data_Aggregator:
 				self.t_start_recording_offset = meta_data['start_wait']
 			else:
 				self.t_start_recording_offset = 0
-
+		else:
+			self.video_identification_features = None
 		# load relevant pcap data
 		self.load_pcap(_id)
 
@@ -162,13 +166,169 @@ class Data_Aggregator:
 		self.visualize_bit_transfers(_id)
 		pickle.dump(self.bytes_transfered, open(os.path.join(self.pcap_dir, "{}_processed.pkl".format(_id)),'wb'))
 
+	def per_flow_video_classifier(self, _id):
+		pcap_file_name = os.path.join(self.pcap_dir, "{}_{}.pcap".format(self.type,_id))
+		decrypted_pkt_data = check_output("tshark -o ssl.keylog_file:{} -r {} -Y tcp.port==443 -V -T json".format(
+			SSL_KEYLOG_FILE, pcap_file_name), shell=True)
+		def dict_raise_on_duplicates(ordered_pairs):
+			# handles duplicate keys, which of course happens for the field we care about
+			d = {}
+			for k,v in ordered_pairs:
+				if k == "http2.header":
+					if k in d:
+						d[k].append(v)
+					else:
+						d[k] = [v]
+				else:
+					d[k] = v
+			return d
+		tester_function = {
+			"twitch": lambda uri: "v1/segment" in uri,
+			"youtube": lambda uri: "videoplayback?" in uri,
+			"netflix": lambda uri: "range/" in uri,
+		}[self.type]
+		def is_http2_request_for_video(pkt):
+			try:
+				http_info = pkt["http2"]
+			except KeyError:
+				# No http info, continueq
+				return None
+			try:
+				http_info = http_info["http2.stream"]
+			except TypeError:
+				return None
+			try:
+				http_headers = http_info["http2.header"]
+			except KeyError:
+				return None
+			for http_header in http_headers:
+				try:
+					requested_uri = http_header["http2.header.value"]
+				except KeyError:
+					continue
+				if tester_function(requested_uri):
+					print(requested_uri)
+					return True
+			return None
+		def is_http_request_for_video(pkt):
+			try:
+				http_info = pkt["http"]
+			except KeyError:
+				return None
+			try:
+				requested_uri = http_info["http.request.full_uri"]
+			except KeyError:
+				return None
+			if tester_function(requested_uri):
+				print(requested_uri)
+				return True
+			return None
+		def get_tls_server_hostname(pkt):
+			try:
+				handshake_info = pkt["ssl"]["ssl.record"]["ssl.handshake"]
+			except (KeyError, TypeError):
+				return None
+			for k in handshake_info:
+				if "Extension: server_name" in k:
+					try:
+						server_name = handshake_info[k]["Server Name Indication extension"]["ssl.handshake.extensions_server_name"]
+					except KeyError:
+						continue
+					return server_name
+			return None
+
+		def get_flow(pkt):
+			dst_ip = pkt["ip"]["ip.dst"]
+			src_port = int(pkt["tcp"]["tcp.srcport"])
+			dst_port = int(pkt["tcp"]["tcp.dstport"])
+			flow_id = (dst_ip, src_port, dst_port)
+			return flow_id
+
+		decrypted_pkt_data = json.loads(decrypted_pkt_data.decode('utf-8'), object_pairs_hook=dict_raise_on_duplicates)
+		flow_descriptors = {}
+		all_flows = []
+		for pkt in decrypted_pkt_data:
+			pkt = pkt["_source"]["layers"]
+			# Get label
+			# Flow ID
+			flow_id = get_flow(pkt)
+			all_flows.append(flow_id)
+			if is_http2_request_for_video(pkt) or is_http_request_for_video(pkt):
+				try:
+					flow_descriptors[flow_id]
+				except KeyError:
+					flow_descriptors[flow_id] = {
+						"is_video": True,
+						"total_bytes": 0,
+						"total_bytes_up": 0,
+						"total_bytes_down": 0,
+						"byte_deliveries": [] # (time, n_bytes) for packet deliveries
+					}
+		all_flows = set(all_flows)
+		not_video = get_difference(all_flows, list(flow_descriptors.keys()))
+		for k in not_video:
+			flow_descriptors[k] = {
+				"is_video": False,
+				"total_bytes": 0,
+				"total_bytes_up": 0,
+				"total_bytes_down": 0,
+				"byte_deliveries": [] # (time, n_bytes) for packet deliveries
+			}
+		
+		# Get all the features -- note, we need to be able to get all these features 
+		# from encrypted packets
+		for pkt in decrypted_pkt_data:
+			pkt = pkt["_source"]["layers"]
+			flow_id = get_flow(pkt)
+			pkt_size = int(pkt["frame"]["frame.len"])
+			flow_descriptors[flow_id]["total_bytes"] += pkt_size
+			if flow_id[0] in INTERNAL_IPS:
+				# delivery
+				pkt_time = float(pkt["frame"]["frame.time_epoch"])
+				flow_descriptors[flow_id]["byte_deliveries"].append((pkt_time, pkt_size))
+				flow_descriptors[flow_id]["total_bytes_down"] += pkt_size
+			else:
+				flow_descriptors[flow_id]["total_bytes_up"] += pkt_size
+
+			# see if this is a tls handshake packet
+			# if so, get the tls server hostname
+			tls_server_hostname = get_tls_server_hostname(pkt)
+			if tls_server_hostname:
+				flow_descriptors[flow_id]["tls_server_hostname"] = tls_server_hostname
+		
+		# calculate throughput-based features
+		duration = 5 # seconds
+		def get_throughputs(packet_deliveries):
+			times = np.array([el[0] for el in packet_deliveries])
+			sizes = np.array([el[1] for el in packet_deliveries])
+			times = times - np.min(times)
+			n_bins = int(np.ceil(np.max(times) / duration))
+			throughputs = np.zeros(n_bins)
+			for t,s in zip(times, sizes):
+				_bin = int(t//duration)
+				throughputs[_bin] += s
+			throughputs /= duration
+			return throughputs
+
+		for flow in flow_descriptors:
+			byte_deliveries = flow_descriptors[flow]["byte_deliveries"]
+			if len(byte_deliveries) <= 1:
+				continue
+			tpt_measurements = get_throughputs(byte_deliveries)
+			flow_descriptors[flow]["mean_throughput"] = np.mean(tpt_measurements)
+			flow_descriptors[flow]["max_throughput"] = np.max(tpt_measurements)
+			flow_descriptors[flow]["var_throughput"] = np.var(tpt_measurements)
+		# Save these features with the rest
+		self.video_identification_features = flow_descriptors
+
 	def populate_features(self, link, _id):
 		self.qoe_features[_id] = {
 			"byte_statistics": None,
 			"other_statistics": {},
 			"info": {"link": link},
 			"stats_panel": self.stats_panel_info,
-			"start_offset": self.t_start_recording_offset
+			"start_offset": self.t_start_recording_offset,
+			"video_identification_features": self.video_identification_features,
 		}
 
 		# other statistics
@@ -322,7 +482,6 @@ class Data_Aggregator:
 				continue
 			self.load_data(link, _id)
 			self.populate_features(link, _id)
-
 		self.save_features()
 		self.cleanup_files()		
 

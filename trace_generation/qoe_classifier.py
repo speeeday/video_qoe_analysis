@@ -6,28 +6,40 @@ from helpers import *
 import geoip2.database
 import matplotlib.pyplot as plt
 
+import tensorflow as tf
+
 class QOE_Classifier:
 	def __init__(self):
 		self.features_dir = "./features"
 		self.metadata_dir = METADATA_DIR
 		self.pcap_dir = "./pcaps"
-		self.train_proportion = .5
+		self.train_proportion = .8
 		self.history_length = 100
-		self._types = ["twitch", "netflix", "youtube"]
+		#self._types = ["twitch", "netflix", "youtube"]
+		self._types = ["twitch"]
 		self.type_to_label_mapping = {_type : i for i,_type in enumerate(self._types)}
 		self.sessions_to_clean = {t:[] for t in self._types}
+		self.max_dl = float(15e6) # maximum download size -- we divide by this value; could make this depend on the application
+
+
+		self.X = {"train": {}, "val": {}, "all": []}
+		self.Y = {"train": {}, "val": {}, "all": []}
+		self.metadata = {"train": [], "val": [], "all": []} # contains info about each example, in case we want to sort on these values
 
 		self.data = {_type: [] for _type in self._types}
 		self.visual_quality_labels = {"high": 2,"medium":1,"low":0}
 		self.buffer_health_labels = {"high": 2,"medium":1,"low":0}
 		
+		self.label_types = ["quality", "buffer", "state"]
 		self.quality_string_mappings = {
 			"twitch": {
 				"0x0": self.visual_quality_labels["low"],
 				"1600x900": self.visual_quality_labels["high"],
+				"1664x936": self.visual_quality_labels["high"],
 				"852x480": self.visual_quality_labels["medium"],
 				"1280x720": self.visual_quality_labels["high"],
 				"1920x1080": self.visual_quality_labels["high"],
+				"1704x960": self.visual_quality_labels["high"],
 				"640x360": self.visual_quality_labels["low"],
 				"256x144": self.visual_quality_labels["low"],
 				"284x160": self.visual_quality_labels["low"],
@@ -57,13 +69,29 @@ class QOE_Classifier:
 		}
 
 		# 0 -> bad, 1 -> good
+		self.state_labels = {"good": 1, "bad": 0}
 		self.video_states = { # paused and play are good, rebuffering is bad
-			"twitch": {"playing": 1, "rebuffer": 0, "paused": 1},
-			"netflix": {"playing": 1, "paused": 1, "waiting for decoder": 0},
+			"twitch": {
+				"playing": self.state_labels["good"], 
+				"rebuffer": self.state_labels["bad"], 
+				"paused": self.state_labels["good"]
+			},
+			"netflix": {
+				"playing": self.state_labels["good"], 
+				"paused": self.state_labels["good"], 
+				"waiting for decoder": self.state_labels["bad"]
+			},
 			# 4-> paused, 8-> playing, 14->loading, 9->rebuffer, 5->(i think) paused, low buffer
 			# https://support.google.com/youtube/thread/5642614?hl=en for lengthy discussion
-			"youtube": {"4": 1, "8": 1, "14": 1, "9": 0, "5": 0}
+			"youtube": {
+				"4": self.state_labels["good"], 
+				"8": self.state_labels["good"], 
+				"14": self.state_labels["good"], 
+				"9": self.state_labels["bad"], 
+				"5": self.state_labels["bad"]
+			}
 		}
+		self.all_labels = {"quality": self.visual_quality_labels, "buffer": self.buffer_health_labels, "state": self.state_labels}
 
 	def cleanup(self):
 		""" Log files, pcaps, etc.. may be accidentally deleted over time. Get rid of these in examples, since we are missing information."""
@@ -134,15 +162,42 @@ class QOE_Classifier:
 		label = [quality_label, buffer_health_label, state_label]
 		return label
 
-	def train_and_evaluate(self):
-		pass
+	def train_and_evaluate(self, label_type):
+		cat_y_train,cat_y_val = map(tf.keras.utils.to_categorical,[self.Y["train"], self.Y["val"]])
+		model = tf.keras.models.Sequential()
+		model.add(tf.keras.layers.Conv2D(
+			5,
+			(5,5),
+			strides=(1,1),
+			padding='valid',
+			activation=tf.keras.activations.relu,
+			use_bias=True,
+		))
+		model.add(tf.keras.layers.Conv2D(
+			3,
+			(1,5),
+			strides=(1,3),
+			padding='valid',
+			#activation=tf.keras.activations.relu,
+			use_bias=True,
+		))
+		model.add(tf.keras.layers.Flatten())
+		model.add(tf.keras.layers.Dropout(rate=.15))
+		model.add(tf.keras.layers.Dense(
+			3,
+			activation=tf.keras.activations.softmax,
+			use_bias=True,
+		))
+		model.compile(optimizer=tf.keras.optimizers.Adam(
+			learning_rate=.01
+		), loss='categorical_crossentropy', metrics=['accuracy'])
+		model.fit(self.X["train"], cat_y_train, batch_size=64,validation_data=(self.X["val"], cat_y_val), epochs=40)
+		preds = model.predict(self.X["val"])
+		preds = np.argmax(preds, axis=1)
+		print(tf.math.confusion_matrix(self.Y["val"], preds, 3))
 
 	def make_train_val(self):
 		# Creates self.X (train, val) and self.Y (train, val)
-		self.X = {"train": [], "val": [], "all": []}
-		self.Y = {"train": [], "val": [], "all": []}
-		self.metadata = {"train": [], "val": [], "all": []} # contains info about each example, in case we want to sort on these values
-
 		for _type in self.data:
 			lab = self.type_to_label_mapping[_type]
 			for example in self.data[_type]:
@@ -157,7 +212,7 @@ class QOE_Classifier:
 				byte_stats = example["byte_statistics"]
 				size_byte_stats = byte_stats.shape
 				for i in range(size_byte_stats[1]):
-					# if i % 5 != 0:
+					# if i % 20 != 0:
 					# 	continue
 					# get the ips who have been communicated with up until this point (i.e. the IPs that we know about, enforcing causality)
 					all_flows = []
@@ -193,7 +248,7 @@ class QOE_Classifier:
 						continue
 					# normalize between 0 and 1, cheating here; perhaps find a reasonable number to divide by for all files
 					# could max out byte counts for unexpectedly high counts
-					temporal_image /= np.max(np.max(np.max(temporal_image)))
+					temporal_image /= self.max_dl
 
 					other_features = [el for el in ip_likelihood]
 					[other_features.append(el) for el in asn_dist]
@@ -209,48 +264,83 @@ class QOE_Classifier:
 					self.metadata["all"].append((i, _type)) # timestep, type
 
 		n_total_examples = len(self.X["all"])
+		limiting_factors = np.array([np.zeros((len(self.all_labels[label_type]))) for label_type in self.label_types])
 		for _type in self._types:
 			inds = [i for i,el in enumerate(self.metadata["all"]) if el[1] == _type]
 			labs = [self.Y["all"][i] for i in inds]
 			print("Type: {}, {} total examples".format(_type,len(inds)))
-			str_labs = ["quality", "buffer", "state"]
 			for l in range(3):
 				x,c = np.unique([el[l] for el in labs],return_counts=True)
-				print("{} - {} with counts {}".format(str_labs[l], x,c))
+				for el_x,el_c in zip(x,c):
+					limiting_factors[l][el_x] += el_c
+				print("{} - {} with counts {}".format(self.label_types[l], x,c))
+		# minimum counts of label, for various label types -- our data set is constrained by this factor
+		limiting_factors = [np.min(el) for el in limiting_factors] 
 		from sklearn.model_selection import train_test_split
-		split_inds = train_test_split(range(n_total_examples), test_size=1-self.train_proportion)
-		train_inds, test_inds = split_inds
-		self.X["train"] = [self.X["all"][i] for i in train_inds]
-		self.Y["train"] = [self.Y["all"][i] for i in train_inds]
-		self.metadata["train"] = [self.metadata["all"][i] for i in train_inds]
+		l_i = 0
+		for label_type, lf in zip(self.label_types, limiting_factors):
+			examples_by_label = [[x for x,_y in zip(self.X["all"], self.Y["all"]) if _y[l_i] == y] for y in range(len(self.all_labels[label_type]))]
+			print(lf)
+			n_train = int(lf*self.train_proportion)
+			n_val = int(lf - n_train)
+			train_example_indices = [np.random.choice(range(len(el)), size=n_train, replace=False) for el in examples_by_label]
+			val_example_indices = [get_difference(range(len(el)), tei) for el,tei in zip(examples_by_label, train_example_indices)]
+			val_example_indices = [np.random.choice(vei, size=n_val, replace=False) for vei in val_example_indices]
 
-		self.X["val"] = [self.X["all"][i] for i in test_inds]
-		self.Y["val"] = [self.Y["all"][i] for i in test_inds]
-		self.metadata["train"] = [self.metadata["all"][i] for i in test_inds]
+			train_examples_to_save = [[self.X["all"][i] for i in tei] for tei in train_example_indices]
+			self.X["train"][label_type] = [el for l in train_examples_to_save for el in l]
+			self.Y["train"][label_type] = [i for i in range(len(train_examples_to_save)) for l in train_examples_to_save[i]]
+			
+			val_examples_to_save = [[self.X["all"][i] for i in vei] for vei in val_example_indices]
+			self.X["val"][label_type] = [el for l in val_examples_to_save for el in l]
+			self.Y["val"][label_type] = [i for i in range(len(val_examples_to_save)) for l in val_examples_to_save[i]]
+			l_i += 1
 
+	def save_train_val(self):
+		# saves the training and validation sets to pkls
+		# each label type gets its own train + val set, since each will get its own classifier (at least for now)
+		for i,label in enumerate(self.label_types):
+			train = {"X": self.X["train"][label], "Y": self.Y["train"][label]}
+			val = {"X": self.X["val"][label], "Y": self.Y["val"][label]}
+			t_fn, v_fn = os.path.join(self.features_dir, "{}-{}.pkl".format(label,"train")), os.path.join(self.features_dir,"{}-{}.pkl".format(label,"val"))
+			pickle.dump(train, open(t_fn,'wb'))
+			pickle.dump(val, open(v_fn,'wb'))
 
-	def load_data(self):
-		for features_file in glob.glob(os.path.join(self.features_dir, "*-features.pkl")):
-			features_type = re.search("{}/(.+)-features.pkl".format(self.features_dir), features_file).group(1)
-			if features_type not in self._types:
-				continue
-			features = pickle.load(open(features_file,'rb'))
-			for _id, v in features.items():
-				v["_id"] = _id
-				self.data[features_type].append(v)
+	def load_data(self, dtype='raw', label_type=None):
+		if dtype == 'raw':
+			print("Loading raw data")
+			for features_file in glob.glob(os.path.join(self.features_dir, "*-features.pkl")):
+				features_type = re.search("{}/(.+)-features.pkl".format(self.features_dir), features_file).group(1)
+				if features_type not in self._types:
+					continue
+				features = pickle.load(open(features_file,'rb'))
+				for _id, v in features.items():
+					v["_id"] = _id
+					self.data[features_type].append(v)
+		elif dtype == 'formatted':
+			print("Loading pre-formatted data")
+			t_fn, v_fn = os.path.join(self.features_dir, "{}-{}.pkl".format(label_type,"train")),\
+				os.path.join(self.features_dir,"{}-{}.pkl".format(label_type,"val"))
+			t, v = pickle.load(open(t_fn,'rb')), pickle.load(open(v_fn,'rb'))
+			self.X["train"], self.Y["train"] = np.array([el[0] for el in t["X"]]), np.array(t["Y"])
+			self.X["val"], self.Y["val"] = np.array([el[0] for el in v["X"]]), np.array(v["Y"])
+		else:
+			raise ValueError("dtype {} not understood".format(dtype))
 
-	def run(self):
-		self.load_data()
-
-		self.make_train_val()
-
-		self.train_and_evaluate()
+	def run(self, label_type):
+		if not os.path.exists(os.path.join(self.features_dir, "{}-train.pkl".format(label_type))):
+			# only do this if we need to
+			self.load_data('raw')
+			self.make_train_val()
+			self.save_train_val()
+		self.load_data('formatted', label_type)
+		self.train_and_evaluate(label_type)
 
 		self.cleanup()
 
 def main():
 	qoec = QOE_Classifier()
-	qoec.run()
+	qoec.run('quality')
 
 if __name__ == "__main__":
 	main()

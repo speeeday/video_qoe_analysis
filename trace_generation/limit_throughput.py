@@ -23,7 +23,7 @@ def limit_throughput(file):
 		if bw_restriction != last_bw_restriction:
 			# set the new bw restriction
 			#print("Setting bandwidth restriction to {} kbps".format(bw_restriction))
-			call("tcset ens5 --overwrite --rate {}Kbps --direction incoming".format(bw_restriction), shell=True)
+			call("tcset ens5 --overwrite --rate {}Kbps --direction incoming --src-port 443".format(bw_restriction), shell=True)
 			# outgoing doesn't really matter, since relatively little data is exiting the network
 			#call("tcset ens5 --rate {}Kbps --direction outgoing".format(bw_restriction), shell=True)
 			#print(check_output("tcshow ens5", shell=True))

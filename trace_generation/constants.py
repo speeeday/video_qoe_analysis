@@ -8,6 +8,7 @@ KNOWN_IP_LIST_FN = "known_ips.pkl"
 TRACES_DIR = "./throughput_traces/traces"
 PCAP_DIR = "./pcaps"
 LOG_DIR = "./logs"
+SSL_KEYLOG_FILE ="./ssl_keys/sslkeylog.log"
 
 # IPs internal to the observed network
 INTERNAL_IPS = ["172.31.30.176"]
