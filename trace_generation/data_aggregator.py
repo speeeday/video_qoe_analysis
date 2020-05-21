@@ -207,7 +207,6 @@ class Data_Aggregator:
 				except KeyError:
 					continue
 				if tester_function(requested_uri):
-					print(requested_uri)
 					return True
 			return None
 		def is_http_request_for_video(pkt):
@@ -220,7 +219,6 @@ class Data_Aggregator:
 			except KeyError:
 				return None
 			if tester_function(requested_uri):
-				print(requested_uri)
 				return True
 			return None
 		def get_tls_server_hostname(pkt):

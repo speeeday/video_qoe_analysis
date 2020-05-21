@@ -67,7 +67,7 @@ class Data_Gatherer:
 			p = Popen("python limit_throughput.py &", shell=True, preexec_fn=os.setsid)
 		# watch the video
 		call(cmd, shell=True)
-		if tc:
+		if self.tc:
 			# Kill traffic control, and delete rules
 			os.killpg(os.getpgid(p.pid), signal.SIGTERM)
 			call("tcdel ens5 --all", shell=True)
