@@ -14,6 +14,6 @@ SSL_KEYLOG_FILE ="./ssl_keys/sslkeylog.log"
 INTERNAL_IPS = ["172.31.30.176"]
 ASN_LIST = ["GOOGLE", "NETFLIX-ASN", "AMAZON-AES", "AKAMAI-AS", "FACEBOOK", "JUSTINTV", "OTHER"]
 ASN_LIST = {k:i for i, k in enumerate(ASN_LIST)}
-MAX_TIME = 120
+MAX_TIME = 45
 NETFLIX_PROFILE_INDEX = 3 # number in the list of netflix profiles on the accouont you should use (zero indexed)
 T_INTERVAL = 1

@@ -199,7 +199,6 @@ class QOE_Classifier:
 	def make_train_val(self):
 		# Creates self.X (train, val) and self.Y (train, val)
 		for _type in self.data:
-			lab = self.type_to_label_mapping[_type]
 			for example in self.data[_type]:
 				# populate features
 				# get the asn list at each point in time

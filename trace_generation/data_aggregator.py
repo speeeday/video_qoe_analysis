@@ -168,8 +168,10 @@ class Data_Aggregator:
 
 	def per_flow_video_classifier(self, _id):
 		pcap_file_name = os.path.join(self.pcap_dir, "{}_{}.pcap".format(self.type,_id))
-		decrypted_pkt_data = check_output("tshark -o ssl.keylog_file:{} -r {} -Y tcp.port==443 -V -T json".format(
-			SSL_KEYLOG_FILE, pcap_file_name), shell=True)
+		cmd = "tshark -o ssl.keylog_file:{} -r {} -Y tcp.port==443 -V -T json".format(
+			SSL_KEYLOG_FILE, pcap_file_name)
+		# print(cmd)
+		decrypted_pkt_data = check_output(cmd, shell=True)
 		def dict_raise_on_duplicates(ordered_pairs):
 			# handles duplicate keys, which of course happens for the field we care about
 			d = {}
@@ -236,10 +238,14 @@ class Data_Aggregator:
 			return None
 
 		def get_flow(pkt):
-			dst_ip = pkt["ip"]["ip.dst"]
-			src_port = int(pkt["tcp"]["tcp.srcport"])
-			dst_port = int(pkt["tcp"]["tcp.dstport"])
-			flow_id = (dst_ip, src_port, dst_port)
+			# our IP and the HTTPS dst port are trivial
+			if pkt["ip"]["ip.dst"] in INTERNAL_IPS:
+				dst_ip = pkt["ip"]["ip.src"]
+				port = int(pkt["tcp"]["tcp.dstport"])
+			else:
+				dst_ip = pkt["ip"]["ip.dst"]
+				port = int(pkt["tcp"]["tcp.srcport"])
+			flow_id = (dst_ip, port)
 			return flow_id
 
 		decrypted_pkt_data = json.loads(decrypted_pkt_data.decode('utf-8'), object_pairs_hook=dict_raise_on_duplicates)
@@ -264,6 +270,11 @@ class Data_Aggregator:
 					}
 		all_flows = set(all_flows)
 		not_video = get_difference(all_flows, list(flow_descriptors.keys()))
+		print("Found {} video flows, {} not video flows.".format(
+			len(all_flows) - len(not_video), len(not_video)))
+		print("Video flows are:")
+		for flow in flow_descriptors:
+			print(flow)
 		for k in not_video:
 			flow_descriptors[k] = {
 				"is_video": False,
@@ -275,25 +286,32 @@ class Data_Aggregator:
 		
 		# Get all the features -- note, we need to be able to get all these features 
 		# from encrypted packets
+		# This doesn't really suffice
+		# TODO -- work on TLS server hostname features + freq. domain features
 		for pkt in decrypted_pkt_data:
 			pkt = pkt["_source"]["layers"]
 			flow_id = get_flow(pkt)
 			pkt_size = int(pkt["frame"]["frame.len"])
 			flow_descriptors[flow_id]["total_bytes"] += pkt_size
-			if flow_id[0] in INTERNAL_IPS:
+
+			if pkt["ip"]["ip.dst"] in INTERNAL_IPS:
 				# delivery
 				pkt_time = float(pkt["frame"]["frame.time_epoch"])
 				flow_descriptors[flow_id]["byte_deliveries"].append((pkt_time, pkt_size))
 				flow_descriptors[flow_id]["total_bytes_down"] += pkt_size
 			else:
 				flow_descriptors[flow_id]["total_bytes_up"] += pkt_size
-
 			# see if this is a tls handshake packet
 			# if so, get the tls server hostname
 			tls_server_hostname = get_tls_server_hostname(pkt)
 			if tls_server_hostname:
 				flow_descriptors[flow_id]["tls_server_hostname"] = tls_server_hostname
 		
+		for flow in flow_descriptors:
+			print("Flow: {} Is Video: {}, TLS server hostname: {}".format(flow,
+				int(flow_descriptors[flow]["is_video"]),flow_descriptors[flow]["tls_server_hostname"]))
+		exit(0)
+
 		# calculate throughput-based features
 		duration = 5 # seconds
 		def get_throughputs(packet_deliveries):
@@ -315,7 +333,7 @@ class Data_Aggregator:
 			tpt_measurements = get_throughputs(byte_deliveries)
 			flow_descriptors[flow]["mean_throughput"] = np.mean(tpt_measurements)
 			flow_descriptors[flow]["max_throughput"] = np.max(tpt_measurements)
-			flow_descriptors[flow]["var_throughput"] = np.var(tpt_measurements)
+			flow_descriptors[flow]["std_throughput"] = np.sqrt(np.var(tpt_measurements))
 		# Save these features with the rest
 		self.video_identification_features = flow_descriptors
 
