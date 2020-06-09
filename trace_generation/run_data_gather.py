@@ -12,7 +12,7 @@ from constants import *
 
 class Data_Gatherer:
 	def __init__(self):
-		self.n_to_collect = 10 # number of videos or sessions to visit
+		self.n_to_collect = 200 # number of videos or sessions to visit
 		# Load credentials
 		self.netflix_login_url = "https://www.netflix.com/login"
 		self.netflix_username = open('credentials/netflix_username.txt').read().strip('\n').split('\n')[0]
@@ -27,8 +27,8 @@ class Data_Gatherer:
 
 		self.tc = False # whether or not to run traffic control, encourages more interesting experiments
 		self.run_each = { # whether or not I want to run data collection for each service
-			"netflix": False,
-			"youtube": False,
+			"netflix": True,
+			"youtube": True,
 			"twitch": True,
 			"no_video": False,
 		}
@@ -74,7 +74,6 @@ class Data_Gatherer:
 		# to prevent space problems, aggregate after each run
 		call("python data_aggregator.py --mode run --type {}".format(
 			_type), shell=True) 
-		exit(0)
 
 	def netflix_login(self):
 		self.driver.get(self.netflix_login_url)
@@ -146,6 +145,7 @@ class Data_Gatherer:
 			# Now gather stats about each of these
 			if len(self.netflix_video_ids) > self.n_to_collect:
 				self.netflix_video_ids = np.random.choice(self.netflix_video_ids, self.n_to_collect, replace=False)
+			print("Going through {} video links.".format(len(self.netflix_video_ids)))
 			for video_id in self.netflix_video_ids:
 				print("Watching netflix video with id : {}".format(video_id))
 				self.call_data_gather("netflix","https://www.netflix.com/watch/{}".format(video_id))
@@ -191,6 +191,7 @@ class Data_Gatherer:
 
 			if len(self.youtube_video_links) > self.n_to_collect:
 				self.youtube_video_links = np.random.choice(self.youtube_video_links, self.n_to_collect, replace=False)
+			print("Going through {} video links.".format(len(self.youtube_video_links)))
 			for video_link in self.youtube_video_links:
 				print("Conducting data gather for video : {}".format(video_link))
 				self.call_data_gather("youtube", video_link)
@@ -227,6 +228,7 @@ class Data_Gatherer:
 			self.twitch_profiles = [el for el in self.twitch_profiles if el]
 			if len(self.twitch_profiles) > self.n_to_collect:
 				self.twitch_profiles = np.random.choice(self.twitch_profiles, self.n_to_collect, replace=False)
+			print("Going through {} video links.".format(len(self.twitch_profiles)))
 			for twitch_profile in self.twitch_profiles:
 				print("Watching stream of profile : {}".format(twitch_profile))
 				self.call_data_gather("twitch", "https://www.twitch.tv/{}".format(twitch_profile))

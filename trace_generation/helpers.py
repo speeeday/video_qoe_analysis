@@ -1,5 +1,6 @@
 from constants import *
 import numpy as np, os, pickle
+from copy import deepcopy
 from bisect import bisect_left
 
 def get_difference(set1, set2):
@@ -105,3 +106,50 @@ def get_cdf_xy(data, logx=False, logy=False, n_points = 500, weighted=False):
 	cdf_data = [cdf_data_obj(point) for point in x]
 
 	return [x, cdf_data]
+
+def get_even_train_split(all_x, all_y, train_proportion, verbose=True):
+	# forms train and validation sets
+	# y is an array of labels, for various problem types
+	# each problem type is limited by a sub-class (the one with the least examples)
+	# form a training set for each problem type that maximizes # of limiting examples we train on
+	# while retaining an even number of examples from each sub-class
+
+	# returns x_train, y_train, x_val, y_val
+	# each x,y -> problem_type -> examples, labels
+
+	n_problem_types = len(all_y[0])
+	X = {
+		"train": {i: [] for i in range(n_problem_types)},
+		"val": {i: [] for i in range(n_problem_types)},
+	}
+	Y = {
+		"train": {i: [] for i in range(n_problem_types)},
+		"val": {i: [] for i in range(n_problem_types)},
+	}
+
+	for problem_type in range(n_problem_types):
+		these_labels = [_y[problem_type] for _y in all_y]
+		# Number of classes for this problem type
+		num_sub_classes = len(set(these_labels))
+		# Get the limiting sub-class for this problem type
+		u, c = np.unique(these_labels, return_counts = True)
+		if len(c) - 1 != np.max(these_labels):
+			raise ValueError("You need at least two examples for each sub-class.")
+		limiting_factor = np.min(c)
+		if verbose:
+			print("Limiting number for problem type {} is {} examples.".format(problem_type, limiting_factor))
+		examples_by_label = [np.array([x for x,_y in zip(all_x, these_labels) if _y == y]) for y in range(num_sub_classes)]
+		# Number of examples of each sub-class to use in the training set
+		n_to_pull = int(limiting_factor*train_proportion)
+		example_indices_by_class = {}
+		# Get indices of examples of train and val to use, for each sub-class
+		example_indices_by_class["train"] = [np.random.choice(range(len(this_class)), 
+			size=n_to_pull, replace=False) for this_class in examples_by_label]
+		example_indices_by_class["val"] = [get_difference(range(len(this_class)), train_examples_this_class) for 
+			train_examples_this_class, this_class in zip(example_indices_by_class["train"], examples_by_label)]
+		# Fill in the examples & labels, given the indices for each sub-class
+		for k in example_indices_by_class:
+			for i,example_indices in enumerate(example_indices_by_class[k]):
+				[X[k][problem_type].append(examples_by_label[i][j]) for j in example_indices]
+				Y[k][problem_type] += [i] * len(example_indices)
+	return X["train"], Y["train"], X["val"], Y["val"]

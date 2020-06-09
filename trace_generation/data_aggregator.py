@@ -19,6 +19,7 @@ class Data_Aggregator:
 		self.log_dir = "./logs"
 		self.pcap_dir = "./pcaps"
 		self.save_dir = "./features"
+		self.fig_dir = "./figures"
 		self.metadata_dir = METADATA_DIR
 		self.error_report_dir = ERROR_REPORT_DIR
 		self.t_interval = T_INTERVAL # seconds, interval over which to bin/sum/average statistics like # bytes received
@@ -163,7 +164,7 @@ class Data_Aggregator:
 		# 			self.bytes_transfered[i][ip]
 		# 		except KeyError:
 		# 			self.bytes_transfered[i][ip] = np.zeros(self.n_bins)
-		self.visualize_bit_transfers(_id)
+		# self.visualize_bit_transfers(_id)
 		pickle.dump(self.bytes_transfered, open(os.path.join(self.pcap_dir, "{}_processed.pkl".format(_id)),'wb'))
 
 	def per_flow_video_classifier(self, _id):
@@ -270,11 +271,11 @@ class Data_Aggregator:
 					}
 		all_flows = set(all_flows)
 		not_video = get_difference(all_flows, list(flow_descriptors.keys()))
-		print("Found {} video flows, {} not video flows.".format(
-			len(all_flows) - len(not_video), len(not_video)))
-		print("Video flows are:")
-		for flow in flow_descriptors:
-			print(flow)
+		# print("Found {} video flows, {} not video flows.".format(
+		# 	len(all_flows) - len(not_video), len(not_video)))
+		# print("Video flows are:")
+		# for flow in flow_descriptors:
+		# 	print(flow)
 		for k in not_video:
 			flow_descriptors[k] = {
 				"is_video": False,
@@ -287,7 +288,6 @@ class Data_Aggregator:
 		# Get all the features -- note, we need to be able to get all these features 
 		# from encrypted packets
 		# This doesn't really suffice
-		# TODO -- work on TLS server hostname features + freq. domain features
 		for pkt in decrypted_pkt_data:
 			pkt = pkt["_source"]["layers"]
 			flow_id = get_flow(pkt)
@@ -306,14 +306,10 @@ class Data_Aggregator:
 			tls_server_hostname = get_tls_server_hostname(pkt)
 			if tls_server_hostname:
 				flow_descriptors[flow_id]["tls_server_hostname"] = tls_server_hostname
-		
-		for flow in flow_descriptors:
-			print("Flow: {} Is Video: {}, TLS server hostname: {}".format(flow,
-				int(flow_descriptors[flow]["is_video"]),flow_descriptors[flow]["tls_server_hostname"]))
-		exit(0)
+				#print("{} - {}".format(tls_server_hostname, flow_descriptors[flow_id]["is_video"]))
 
 		# calculate throughput-based features
-		duration = 5 # seconds
+		duration = .25 # seconds
 		def get_throughputs(packet_deliveries):
 			times = np.array([el[0] for el in packet_deliveries])
 			sizes = np.array([el[1] for el in packet_deliveries])
@@ -326,11 +322,35 @@ class Data_Aggregator:
 			throughputs /= duration
 			return throughputs
 
+		NFFT = 64 # max duration of vidoe is ~ NFFT * duration / 60 minutes
+		max_freq = 1.0/duration / 2 # nyquist
+		plot = False
 		for flow in flow_descriptors:
 			byte_deliveries = flow_descriptors[flow]["byte_deliveries"]
 			if len(byte_deliveries) <= 1:
 				continue
 			tpt_measurements = get_throughputs(byte_deliveries)
+			is_video = flow_descriptors[flow]["is_video"]
+			if len(tpt_measurements) > 1:
+				fft_tpt = np.fft.fftshift(np.fft.fft(tpt_measurements,n=NFFT))
+				if plot:
+					f,ax = plt.subplots(2,1)
+					ax[0].plot(np.linspace(0,duration*len(tpt_measurements), len(tpt_measurements)), 
+						tpt_measurements)
+					ax[0].set_xlabel("Time (s)")
+					ax[0].set_ylabel("TPT (B/sec)")
+					ax[0].set_title("Is Video: {}".format(is_video))
+					ax[1].plot(np.linspace(-max_freq, max_freq, NFFT), np.abs(fft_tpt))
+					ax[1].set_xlabel("Freq (Hz)")
+					ax[1].set_ylabel("|T(f)|")
+					ax[1].set_title("Is Video: {}".format(is_video))
+					self.save_fig("{}-{}-{}.pdf".format(self.type, flow, is_video))
+				# Get 5 largest peaks
+				# We do 5 because:
+				# DC is always the largest (more or less)
+				# FFT is symmetric, so we really only take the 2nd and 3rd largest
+				flow_descriptors[flow]["peak_fft_i"] = fft_tpt.argsort()[-5:][::-1]
+
 			flow_descriptors[flow]["mean_throughput"] = np.mean(tpt_measurements)
 			flow_descriptors[flow]["max_throughput"] = np.max(tpt_measurements)
 			flow_descriptors[flow]["std_throughput"] = np.sqrt(np.var(tpt_measurements))
@@ -434,6 +454,11 @@ class Data_Aggregator:
 		call("rm {}".format(os.path.join(self.log_dir, "{}_stats_log_{}-{}-stats.csv".format(self.type,_id,link))), shell=True)
 		call("rm {}".format(os.path.join(self.pcap_dir, "{}_{}.pcap".format(self.type, _id))), shell=True)
 		call("rm {}".format(os.path.join(self.error_report_dir, "went_wrong_{}_{}.png".format(self.type, _id))), shell=True)
+
+	def save_fig(self, fig_fn):
+		plt.savefig(os.path.join(self.fig_dir, fig_fn))
+		plt.clf()
+		plt.close()
 
 	def was_unsuccessful_experiment(self, _id):
 		# check to see if there is a correspond error on this data collection

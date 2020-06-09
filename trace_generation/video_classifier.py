@@ -13,9 +13,8 @@ class Video_Classifier_v2:
 		self.figure_prefix = ""
 		self.metadata_dir = METADATA_DIR
 		self.train_proportion = .8
-		self.history_length = 100
-		#self._types = ["twitch", "netflix", "youtube"]
-		self._types = ["netflix"]
+		self._types = ["twitch", "netflix", "youtube"]
+		#self._types = ["netflix"]
 		self.type_to_label_mapping = {_type : i for i,_type in enumerate(self._types)}
 		self.max_tpt = float(15e6) # maximum download size -- we divide by this value; could make this depend on the application
 
@@ -23,8 +22,9 @@ class Video_Classifier_v2:
 		self.Y = {"train": {}, "val": {}, "all": []}
 		self.metadata = {"train": [], "val": [], "all": []} # contains info about each example, in case we want to sort on these values
 
+		self.label_types = ["video_class"]
 		self.data = {_type: [] for _type in self._types}
-		self.all_labels = [0,1]
+		self.all_labels = {"video_class": [0,1]}
 
 		# Feature processing
 		self.no_feature = -1
@@ -33,15 +33,26 @@ class Video_Classifier_v2:
 		
 	def train_and_evaluate(self):
 		from sklearn.ensemble import RandomForestClassifier
-		clf = RandomForestClassifier(max_features="sqrt", n_estimators=10)
-		print("Fitting random forest model...")
-		clf.fit(self.X["train"], self.Y["train"])
-		print("Computing metrics...")
-		y_pred = clf.predict(self.X["val"])
-		from sklearn.metrics import confusion_matrix, accuracy_score
-		conf_mat = confusion_matrix(self.Y["val"], y_pred)
-		accuracy = accuracy_score(self.Y["val"], y_pred)
-		print("Conf Mat: {} \n\n Accuracy: {}".format(conf_mat, accuracy))
+		from sklearn.metrics import confusion_matrix, accuracy_score, precision_score, recall_score, f1_score
+		for p_type in self.X['train']:
+			print("Problem type: {}".format(p_type))
+			clf = RandomForestClassifier()
+			print("Fitting random forest model...")
+			clf.fit(self.X["train"][p_type], self.Y["train"][p_type])
+			print("Computing metrics...")
+			y_pred = clf.predict(self.X["val"][p_type])
+			
+			
+			conf_mat = confusion_matrix(self.Y["val"][p_type], y_pred)
+			accuracy = accuracy_score(self.Y["val"][p_type], y_pred)
+			prec = precision_score(self.Y["val"][p_type], y_pred)
+			rec = recall_score(self.Y["val"][p_type], y_pred)
+			f1 = f1_score(self.Y["val"][p_type], y_pred)
+			print("Conf Mat: {} \n\n Accuracy: {}".format(conf_mat, accuracy))
+			print("Precision: {}, Recall: {}, F1: {}".format(prec, rec, f1))
+
+			# # visualize predictions
+			# self.visualize_data(self.X['val'][p_type], self.Y['val'][p_type], y_pred)
 
 	def load_data(self, label_type=None):
 		print("Loading raw data")
@@ -54,15 +65,35 @@ class Video_Classifier_v2:
 				v["_id"] = _id
 				self.data[features_type].append(v)
 
-	def visualize_data(self):
-		cs = {0:'r',1:'b'}
-		x,y = [el[2] for el in self.X['train']], [el[1] for el in self.X['train']]
-		x = np.array(x,dtype=np.float64) + .5*np.random.randn(len(x))
-		y = np.array(y,dtype=np.float64) + .5*np.random.randn(len(y))
-		plt.scatter(x,y, c=[cs[lab] for lab in self.Y['train']])
-		plt.xlabel("Bytes Down")
-		plt.ylabel("Bytes Up")
+	def visualize_data(self, x, y, y_pred):
+		# visualize the confusion matrix
+		cs = {'TN': 'r', 'TP': 'b', 'FP': 'y', 'FN': 'k'}
+		features_of_interest = [0,6]
+		axis_labels = ["Bytes", "TLS"]
+		arrs = [[_x[f] for _x in x] for f in features_of_interest]
+		colors = []
+		for _y, _y_pred in zip(y,y_pred):
+			if _y == _y_pred and _y:
+				colors.append(cs['TP'])
+			elif _y == _y_pred and not _y:
+				colors.append(cs['TN'])
+			elif _y != _y_pred and _y:
+				colors.append(cs['FN'])
+			else:
+				colors.append(cs['FP'])
+		arrs = [np.array(_x,dtype=np.float64) + .05*np.random.randn(len(_x)) for _x in arrs]
+		plt.scatter(arrs[0],arrs[1], c=colors)
+		plt.xlabel("Bytes")
+		plt.ylabel("TLS")
 		self.save_fig("feature_viz.pdf")
+
+	def get_bytes_feature(self, n_bytes):
+		mtu = 1500 # bytes
+		return int(math.log(n_bytes / mtu, self.bytes_log_base))
+
+	def get_tpt_feature(self, tpt):
+		conversion = 1e3 # bytes / sec
+		return int(math.log(tpt / conversion, self.tpt_log_base))
 
 	def make_train_val(self):
 		# Creates self.X (train, val) and self.Y (train, val)
@@ -79,75 +110,76 @@ class Video_Classifier_v2:
 					# Total Bytes
 					if this_ex["total_bytes"] == 0:
 						continue
-					total_bytes = int(math.log(this_ex["total_bytes"],self.bytes_log_base))
+					total_bytes = self.get_bytes_feature(this_ex["total_bytes"])
 					# Up
 					if this_ex["total_bytes_up"] > 0:
-						tb_up = int(math.log(this_ex["total_bytes_up"],self.bytes_log_base))
+						tb_up = self.get_bytes_feature(this_ex["total_bytes_up"])
 					else:
 						tb_up = self.no_feature
 					# Down
 					if this_ex["total_bytes_down"] > 0:
-						tb_down = int(math.log(this_ex["total_bytes_down"],self.bytes_log_base))
+						tb_down = self.get_bytes_feature(this_ex["total_bytes_down"])
 					else:
 						tb_down = self.no_feature
 					# Take log2 of the throughput variables, since finer granularity provides more information
 					try:
-						mean_tpt = int(math.log(this_ex["mean_throughput"], self.tpt_log_base))
+						mean_tpt = self.get_tpt_feature(this_ex["mean_throughput"])
 					except KeyError:
 						mean_tpt = self.no_feature
 					try:
-						max_tpt = int(math.log(this_ex["max_throughput"], self.tpt_log_base))
+						max_tpt = self.get_tpt_feature(this_ex["max_throughput"])
 					except KeyError:
 						max_tpt = self.no_feature
 					try:
 						if this_ex["std_throughput"] > 0:
-							std_tpt = int(math.log(this_ex["std_throughput"], self.tpt_log_base))
+							std_tpt = self.get_tpt_feature(this_ex["std_throughput"])
 						else:
 							std_tpt = self.no_feature
 					except KeyError:
 						std_tpt = self.no_feature
 
+
+					# TLS hostname
+					try:
+						if "googlevideo.com" in this_ex["tls_server_hostname"]:
+							tls = 1
+						elif "nflxvideo.net" in this_ex["tls_server_hostname"]:
+							tls = 1
+						elif "ttvnw.net" in this_ex["tls_server_hostname"]:
+							tls = 1
+						else:
+							tls = 0
+					except KeyError:
+						tls = 0						
+
+
 					lab = int(this_ex["is_video"])
-					features = [total_bytes, tb_up, tb_down, mean_tpt, max_tpt, std_tpt]
-					# if lab:
-					# 	print("Had video: {}".format(features))
-					# else:
-					# 	print("Didn't have video: {}".format(features))
-					# if np.random.random() > .99:
-					# 	exit(0)
+					features = [total_bytes, tb_up, tb_down, mean_tpt, max_tpt, std_tpt, tls]
+					# FFT harms performance
+					# Would probably want something more like distance between peaks or something
+					# n_fft_to_keep = 2
+					# try:
+					# 	fft_peaks = this_ex["peak_fft_i"]
+					# 	# FFT should be symmetric, so half the information doesn't matter
+					# 	fft_inds = np.abs(np.array(this_ex["peak_fft_i"]) - 32)
+					# 	# Keep the top 3
+					# 	fft_feats = list(fft_inds[-n_fft_to_keep:])
+					# except KeyError:
+					# 	fft_feats = [-1] * n_fft_to_keep
+					# features = features + fft_feats
+					
+					if tls != 1 and lab:
+						print("Didnt match TLS but was video")
+						print(features)
+						try:
+							print(this_ex["tls_server_hostname"])
+						except KeyError:
+							print("No hostname")
 					self.X["all"].append(features)
-					self.Y["all"].append(lab)
+					self.Y["all"].append((lab,))
 					self.metadata["all"].append((_type,)) # type
 
-		n_total_examples = len(self.X["all"])
-		limiting_factors = np.zeros(len(self.all_labels))
-		for _type in self._types:
-			inds = [i for i,el in enumerate(self.metadata["all"]) if el[0] == _type]
-			labs = [self.Y["all"][i] for i in inds]
-			print("Type: {}, {} total examples".format(_type,len(inds)))
-			x,c = np.unique(labs,return_counts=True)
-			for el_x,el_c in zip(x,c):
-				limiting_factors[el_x] += el_c
-			print("{} with counts {}".format(x,c))
-		
-		# minimum counts of label-- our data set is constrained by this factor
-		limiting_factor = np.min(limiting_factors) 
-		print("Limiting amount of data is {} examples.".format(limiting_factor))
-		from sklearn.model_selection import train_test_split
-		examples_by_label = [[x for x,_y in zip(self.X["all"], self.Y["all"]) if _y == y] for y in range(len(self.all_labels))]
-		n_train = int(limiting_factor*self.train_proportion)
-		n_val = int(limiting_factor - n_train)
-		train_example_indices = [np.random.choice(range(len(el)), size=n_train, replace=False) for el in examples_by_label]
-		val_example_indices = [get_difference(range(len(el)), tei) for el,tei in zip(examples_by_label, train_example_indices)]
-		val_example_indices = [np.random.choice(vei, size=n_val, replace=False) for vei in val_example_indices]
-
-		train_examples_to_save = [[self.X["all"][i] for i in tei] for tei in train_example_indices]
-		self.X["train"] = [el for l in train_examples_to_save for el in l]
-		self.Y["train"] = [i for i in range(len(train_examples_to_save)) for l in train_examples_to_save[i]]
-		
-		val_examples_to_save = [[self.X["all"][i] for i in vei] for vei in val_example_indices]
-		self.X["val"] = [el for l in val_examples_to_save for el in l]
-		self.Y["val"] = [i for i in range(len(val_examples_to_save)) for l in val_examples_to_save[i]]
+		self.X["train"], self.Y["train"], self.X["val"], self.Y["val"] = get_even_train_split(self.X["all"], self.Y["all"], self.train_proportion)
 
 	def save_fig(self, fig_file_name,tight=False):
 		# helper function to save to specific figure directory
@@ -163,7 +195,6 @@ class Video_Classifier_v2:
 	def run(self):
 		self.load_data()
 		self.make_train_val()
-		self.visualize_data()
 		self.train_and_evaluate()
 
 class Video_Classifier_v1:

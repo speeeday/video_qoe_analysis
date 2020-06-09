@@ -15,8 +15,8 @@ class QOE_Classifier:
 		self.pcap_dir = "./pcaps"
 		self.train_proportion = .8
 		self.history_length = 100
-		#self._types = ["twitch", "netflix", "youtube"]
-		self._types = ["twitch"]
+		self._types = ["twitch", "netflix", "youtube"]
+		#self._types = ["twitch"]
 		self.type_to_label_mapping = {_type : i for i,_type in enumerate(self._types)}
 		self.sessions_to_clean = {t:[] for t in self._types}
 		self.max_dl = float(15e6) # maximum download size -- we divide by this value; could make this depend on the application
@@ -262,38 +262,8 @@ class QOE_Classifier:
 					self.Y["all"].append(lab)
 					self.metadata["all"].append((i, _type)) # timestep, type
 
-		n_total_examples = len(self.X["all"])
-		limiting_factors = np.array([np.zeros((len(self.all_labels[label_type]))) for label_type in self.label_types])
-		for _type in self._types:
-			inds = [i for i,el in enumerate(self.metadata["all"]) if el[1] == _type]
-			labs = [self.Y["all"][i] for i in inds]
-			print("Type: {}, {} total examples".format(_type,len(inds)))
-			for l in range(3):
-				x,c = np.unique([el[l] for el in labs],return_counts=True)
-				for el_x,el_c in zip(x,c):
-					limiting_factors[l][el_x] += el_c
-				print("{} - {} with counts {}".format(self.label_types[l], x,c))
-		# minimum counts of label, for various label types -- our data set is constrained by this factor
-		limiting_factors = [np.min(el) for el in limiting_factors] 
-		from sklearn.model_selection import train_test_split
-		l_i = 0
-		for label_type, lf in zip(self.label_types, limiting_factors):
-			examples_by_label = [[x for x,_y in zip(self.X["all"], self.Y["all"]) if _y[l_i] == y] for y in range(len(self.all_labels[label_type]))]
-			print(lf)
-			n_train = int(lf*self.train_proportion)
-			n_val = int(lf - n_train)
-			train_example_indices = [np.random.choice(range(len(el)), size=n_train, replace=False) for el in examples_by_label]
-			val_example_indices = [get_difference(range(len(el)), tei) for el,tei in zip(examples_by_label, train_example_indices)]
-			val_example_indices = [np.random.choice(vei, size=n_val, replace=False) for vei in val_example_indices]
-
-			train_examples_to_save = [[self.X["all"][i] for i in tei] for tei in train_example_indices]
-			self.X["train"][label_type] = [el for l in train_examples_to_save for el in l]
-			self.Y["train"][label_type] = [i for i in range(len(train_examples_to_save)) for l in train_examples_to_save[i]]
-			
-			val_examples_to_save = [[self.X["all"][i] for i in vei] for vei in val_example_indices]
-			self.X["val"][label_type] = [el for l in val_examples_to_save for el in l]
-			self.Y["val"][label_type] = [i for i in range(len(val_examples_to_save)) for l in val_examples_to_save[i]]
-			l_i += 1
+		self.X["train"], self.Y["train"], self.X["val"], self.Y["val"] = get_even_train_split(
+			self.X["all"], self.Y["all"], self.train_proportion)
 
 	def save_train_val(self):
 		# saves the training and validation sets to pkls
