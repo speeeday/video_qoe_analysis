@@ -11,6 +11,9 @@ class Video_Classifier_v2:
 		self.features_dir = "./features"
 		self.fig_dir = "./figures"
 		self.figure_prefix = ""
+		self.model_dir = "./models/video_classifier"
+		self.model_name = "video_class_v2.pkl"
+		self.model = None
 		self.metadata_dir = METADATA_DIR
 		self.train_proportion = .8
 		self._types = ["twitch", "netflix", "youtube"]
@@ -51,8 +54,11 @@ class Video_Classifier_v2:
 			print("Conf Mat: {} \n\n Accuracy: {}".format(conf_mat, accuracy))
 			print("Precision: {}, Recall: {}, F1: {}".format(prec, rec, f1))
 
-			# # visualize predictions
-			# self.visualize_data(self.X['val'][p_type], self.Y['val'][p_type], y_pred)
+			# visualize predictions
+			self.visualize_data(self.X['val'][p_type], self.Y['val'][p_type], y_pred)
+
+			print("Saving model for later.")
+			pickle.dump(clf, open(os.path.join(self.model_dir, self.model_name),'wb'))
 
 	def load_data(self, label_type=None):
 		print("Loading raw data")
@@ -95,6 +101,70 @@ class Video_Classifier_v2:
 		conversion = 1e3 # bytes / sec
 		return int(math.log(tpt / conversion, self.tpt_log_base))
 
+	def get_features(self, flow_obj):
+		# For all byte-type features, take log and integerize
+		# Total Bytes
+		if flow_obj["total_bytes"] == 0:
+			return None
+		total_bytes = self.get_bytes_feature(flow_obj["total_bytes"])
+		# Up
+		if flow_obj["total_bytes_up"] > 0:
+			tb_up = self.get_bytes_feature(flow_obj["total_bytes_up"])
+		else:
+			tb_up = self.no_feature
+		# Down
+		if flow_obj["total_bytes_down"] > 0:
+			tb_down = self.get_bytes_feature(flow_obj["total_bytes_down"])
+		else:
+			tb_down = self.no_feature
+		# Take log2 of the throughput variables, since finer granularity provides more information
+		try:
+			mean_tpt = self.get_tpt_feature(flow_obj["mean_throughput"])
+		except KeyError:
+			mean_tpt = self.no_feature
+		try:
+			max_tpt = self.get_tpt_feature(flow_obj["max_throughput"])
+		except KeyError:
+			max_tpt = self.no_feature
+		try:
+			if flow_obj["std_throughput"] > 0:
+				std_tpt = self.get_tpt_feature(flow_obj["std_throughput"])
+			else:
+				std_tpt = self.no_feature
+		except KeyError:
+			std_tpt = self.no_feature
+
+
+		# TLS hostname
+		try:
+			if "googlevideo.com" in flow_obj["tls_server_hostname"]:
+				tls = 1
+			elif "nflxvideo.net" in flow_obj["tls_server_hostname"]:
+				tls = 1
+			elif "ttvnw.net" in flow_obj["tls_server_hostname"]:
+				tls = 1
+			else:
+				tls = 0
+		except KeyError:
+			tls = 0
+
+		# FFT harms performance
+		# Would probably want something more like distance between peaks or something
+		# n_fft_to_keep = 2
+		# try:
+		# 	fft_peaks = this_ex["peak_fft_i"]
+		# 	# FFT should be symmetric, so half the information doesn't matter
+		# 	fft_inds = np.abs(np.array(this_ex["peak_fft_i"]) - 32)
+		# 	# Keep the top 3
+		# 	fft_feats = list(fft_inds[-n_fft_to_keep:])
+		# except KeyError:
+		# 	fft_feats = [-1] * n_fft_to_keep
+		# features = features + fft_feats
+
+		features = [total_bytes, tb_up, tb_down, mean_tpt, max_tpt, std_tpt, tls]
+
+		return features
+
 	def make_train_val(self):
 		# Creates self.X (train, val) and self.Y (train, val)
 		for _type in self.data:
@@ -106,80 +176,27 @@ class Video_Classifier_v2:
 					continue
 				for flow in example:
 					this_ex = example[flow]
-					# For all byte-type features, take log and integerize
-					# Total Bytes
-					if this_ex["total_bytes"] == 0:
+					features = self.get_features(this_ex)
+					if not features:
 						continue
-					total_bytes = self.get_bytes_feature(this_ex["total_bytes"])
-					# Up
-					if this_ex["total_bytes_up"] > 0:
-						tb_up = self.get_bytes_feature(this_ex["total_bytes_up"])
-					else:
-						tb_up = self.no_feature
-					# Down
-					if this_ex["total_bytes_down"] > 0:
-						tb_down = self.get_bytes_feature(this_ex["total_bytes_down"])
-					else:
-						tb_down = self.no_feature
-					# Take log2 of the throughput variables, since finer granularity provides more information
-					try:
-						mean_tpt = self.get_tpt_feature(this_ex["mean_throughput"])
-					except KeyError:
-						mean_tpt = self.no_feature
-					try:
-						max_tpt = self.get_tpt_feature(this_ex["max_throughput"])
-					except KeyError:
-						max_tpt = self.no_feature
-					try:
-						if this_ex["std_throughput"] > 0:
-							std_tpt = self.get_tpt_feature(this_ex["std_throughput"])
-						else:
-							std_tpt = self.no_feature
-					except KeyError:
-						std_tpt = self.no_feature
-
-
-					# TLS hostname
-					try:
-						if "googlevideo.com" in this_ex["tls_server_hostname"]:
-							tls = 1
-						elif "nflxvideo.net" in this_ex["tls_server_hostname"]:
-							tls = 1
-						elif "ttvnw.net" in this_ex["tls_server_hostname"]:
-							tls = 1
-						else:
-							tls = 0
-					except KeyError:
-						tls = 0						
-
-
 					lab = int(this_ex["is_video"])
-					features = [total_bytes, tb_up, tb_down, mean_tpt, max_tpt, std_tpt, tls]
-					# FFT harms performance
-					# Would probably want something more like distance between peaks or something
-					# n_fft_to_keep = 2
-					# try:
-					# 	fft_peaks = this_ex["peak_fft_i"]
-					# 	# FFT should be symmetric, so half the information doesn't matter
-					# 	fft_inds = np.abs(np.array(this_ex["peak_fft_i"]) - 32)
-					# 	# Keep the top 3
-					# 	fft_feats = list(fft_inds[-n_fft_to_keep:])
-					# except KeyError:
-					# 	fft_feats = [-1] * n_fft_to_keep
-					# features = features + fft_feats
 					
-					if tls != 1 and lab:
-						print("Didnt match TLS but was video")
-						print(features)
-						try:
-							print(this_ex["tls_server_hostname"])
-						except KeyError:
-							print("No hostname")
 					self.X["all"].append(features)
 					self.Y["all"].append((lab,))
 					self.metadata["all"].append((_type,)) # type
 
 		self.X["train"], self.Y["train"], self.X["val"], self.Y["val"] = get_even_train_split(self.X["all"], self.Y["all"], self.train_proportion)
+
+	def predict(self, example):
+		# It is assumed a saved model is in the model directory
+		# 
+		if not self.model:
+			model_fn = os.path.join(self.model_dir, self.model_name)
+			if not os.path.exists(model_fn):
+				raise FileNotFoundError("You need to make a video classifier model.")
+			self.model = pickle.load(open(model_fn, 'rb'))
+
+		return self.model.predict(example)
 
 	def save_fig(self, fig_file_name,tight=False):
 		# helper function to save to specific figure directory

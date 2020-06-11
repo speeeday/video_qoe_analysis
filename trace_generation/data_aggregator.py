@@ -100,12 +100,7 @@ class Data_Aggregator:
 			if ip_pkt.p != dpkt.ip.IP_PROTO_TCP and ip_pkt.p != dpkt.ip.IP_PROTO_UDP:
 				# make sure its UDP or TCP
 				continue
-
 			app_data = ip_pkt.data
-
-			# TODO - make this as if we're looking at a network of networks
-			# each (src_ip, source port) is a user stream of data
-			# once a user stream has been identified as containing video, we estimate QoE (potential refinement of feature set)
 
 			src_ip = to_ip_str(ip_pkt.src)
 			dst_ip = to_ip_str(ip_pkt.dst)
@@ -115,35 +110,27 @@ class Data_Aggregator:
 			dest_port = app_data.dport
 			if source_port != 443 and dest_port != 443:
 				continue
-			
 
 			if self.is_internal(src_ip):
 				# outgoing packet
 				try:
 					self.bytes_transfered[0][dst_ip]
 				except KeyError:
-					self.bytes_transfered[0][dst_ip] = {}#np.zeros(n_bins)
-				try:
-					self.bytes_transfered[0][dst_ip][source_port]
-				except KeyError:
-					self.bytes_transfered[0][dst_ip][source_port] = np.zeros(n_bins)
-				bin_of_interest = int(np.floor((ts - t_start / self.t_interval)))
-				self.bytes_transfered[0][dst_ip][source_port][bin_of_interest] += ip_pkt.len
+					self.bytes_transfered[0][dst_ip, source_port] = np.zeros(n_bins)
+				bin_of_interest = int(np.floor(((ts - t_start) / self.t_interval)))
+				self.bytes_transfered[0][dst_ip, source_port][bin_of_interest] += ip_pkt.len
 
 			elif self.is_internal(dst_ip):
 				# incoming packet
 				try:
-					self.bytes_transfered[1][src_ip]
+					self.bytes_transfered[1][src_ip, dest_port]
 				except KeyError:
-					self.bytes_transfered[1][src_ip] ={}# np.zeros(n_bins)
-				try:
-					self.bytes_transfered[1][src_ip][dest_port]
-				except KeyError:
-					self.bytes_transfered[1][src_ip][dest_port] = np.zeros(n_bins)
-				bin_of_interest = int(np.floor((ts - t_start / self.t_interval)))
-				self.bytes_transfered[1][src_ip][dest_port][bin_of_interest] += ip_pkt.len
+					self.bytes_transfered[1][src_ip, dest_port] =np.zeros(n_bins)
+				bin_of_interest = int(np.floor(((ts - t_start) / self.t_interval)))
+				self.bytes_transfered[1][src_ip,dest_port][bin_of_interest] += ip_pkt.len
 			else:
 				print("Neither src: {} nor dst: {} are internal...".format(src_ip, dst_ip))
+
 		# place all IPs into up and down, for convenience
 		all_flows = []
 		for i in range(2):
@@ -152,20 +139,7 @@ class Data_Aggregator:
 					try:
 						self.bytes_transfered[1-i][ip]
 					except KeyError:
-						self.bytes_transfered[1-i][ip] = {}
-					try:
-						self.bytes_transfered[1-i][ip][port]
-					except KeyError:
-						self.bytes_transfered[1-i][ip][port] = np.zeros(n_bins)
-
-		# for flow in all_ips:
-		# 	for i in [0,1]:
-		# 		try:
-		# 			self.bytes_transfered[i][ip]
-		# 		except KeyError:
-		# 			self.bytes_transfered[i][ip] = np.zeros(self.n_bins)
-		# self.visualize_bit_transfers(_id)
-		pickle.dump(self.bytes_transfered, open(os.path.join(self.pcap_dir, "{}_processed.pkl".format(_id)),'wb'))
+						self.bytes_transfered[1-i][ip] = np.zeros(n_bins)
 
 	def per_flow_video_classifier(self, _id):
 		pcap_file_name = os.path.join(self.pcap_dir, "{}_{}.pcap".format(self.type,_id))
@@ -371,10 +345,11 @@ class Data_Aggregator:
 		# distribution of ASN's communicated with up to current timestep
 		# # of ASNs communicated with up to current timestep
 		# is dst IP (/24) known to be associated with video services (which)?
-		all_ips = list(self.bytes_transfered[0].keys())
+		all_flows = list(self.bytes_transfered[0].keys())
+		all_ips = [ip for ip,flow in all_flows]
 		asns = {}
 		with geoip2.database.Reader(os.path.join(self.metadata_dir,"GeoLite2-ASN.mmdb")) as reader:
-			for ip in all_ips:
+			for ip, port in all_flows:
 				try:
 					response = reader.asn(ip)
 				except geoip2.errors.AddressNotFoundError:
@@ -393,43 +368,7 @@ class Data_Aggregator:
 		self.qoe_features[_id]["other_statistics"]["ip_likelihood"] = get_ip_likelihood(all_ips, self.type, modify=False)
 
 		# byte statistics
-
-		# create an array n_ips x history_length x 2 where the statistics are shown for the 
-		# ips with the most traffic (traffic is sum of up and down) over the last history_length interval
-
-		# we don't start recording videco stats until a certain time, fastforward here
-		if self.type == "no_video":
-			bin_start = 0
-		else:
-			bin_start = int(np.floor(self.t_start_recording_offset / self.t_interval))
-		byte_stats = np.zeros((self.n_ips, self.n_bins, 2)) # 
-		current_best_n = {} # dict with self.n_ips keys; each key is index of ip in all_ips -> row in byte_stats this flow occupies
-		all_ports = set([port for ip in self.bytes_transfered[0] for port in self.bytes_transfered[0][ip]])
-
-		# NOTE - I effectively zero-out all packet transfers up to the point where I start recording statistics
-		for i in range(bin_start, self.n_bins):
-			sum_ips = np.array([sum([sum(self.bytes_transfered[0][ip][port][i-self.history_length:i]) for port in self.bytes_transfered[0][ip]])
-			 + sum([sum(self.bytes_transfered[1][ip][port][i-self.history_length:i]) for port in self.bytes_transfered[1][ip]]) for ip in all_ips])
-			# get max n
-			try:
-				best_n = np.argpartition(sum_ips,-1*self.n_ips)[-1*self.n_ips:]
-			except ValueError:
-				print("Link: {}, ID: {}, IPS: {}".format(link,_id,all_ips)); exit(0)
-			if current_best_n == {}:
-				current_best_n = {best: i for i,best in enumerate(best_n)}
-			if set(best_n) != set(current_best_n.keys()):
-				new_best_flows = get_difference(best_n, current_best_n.keys())
-				flows_to_remove = get_difference(current_best_n.keys(), best_n)
-				for add_flow, remove_flow in zip(new_best_flows, flows_to_remove):
-					i_of_new_flow = current_best_n[remove_flow]
-					del current_best_n[remove_flow]
-					current_best_n[add_flow] = i_of_new_flow
-
-			for ip_to_include in best_n:
-				byte_stats[current_best_n[ip_to_include]][i][0] = sum([self.bytes_transfered[0][all_ips[ip_to_include]][port][i] for port in self.bytes_transfered[0][all_ips[ip_to_include]]])
-				byte_stats[current_best_n[ip_to_include]][i][1] = sum([self.bytes_transfered[1][all_ips[ip_to_include]][port][i] for port in self.bytes_transfered[1][all_ips[ip_to_include]]])
-
-		self.qoe_features[_id]["byte_statistics"] = byte_stats
+		self.qoe_features[_id]["byte_statistics"] = self.bytes_transfered
 
 	def save_features(self):
 		# just pickle for now

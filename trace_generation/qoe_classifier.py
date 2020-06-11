@@ -1,25 +1,87 @@
 ## uses temporal data to try and capture qoe metrics
 # Qoe metrics are quality, state, buffer level (high vs low)
-import glob, pickle, numpy as np, os, re
-from constants import *
-from helpers import *
+import glob, pickle, numpy as np, os, re, time, itertools
+
 import geoip2.database
 import matplotlib.pyplot as plt
-
 import tensorflow as tf
+
+from constants import *
+from helpers import *
+from video_classifier import Video_Classifier_v2
+
+
+class K_Model:
+	def __init__(self, batch_size, input_shape, output_shape):
+		self.batch_size = batch_size
+		self.input_shape = input_shape
+		self.output_shape = output_shape
+
+	def build(self):
+		# Define the model here
+		inputs = tf.keras.layers.Input(
+			shape=self.input_shape, 
+			batch_size=self.batch_size
+		)
+		self.inputs = inputs
+
+		# divide into custom feautures and a byte map
+		temporal_image = inputs[:,0:-1,:,:]
+		custom_features = inputs[:,-1,:,0]
+		
+		# Temporal image -- leverage spatial correlations
+		net1 = temporal_image
+		net1 = tf.keras.layers.Conv2D(
+			16,
+			(5,3),
+			strides=(1,1),
+			padding='valid',
+			activation=tf.keras.activations.relu,
+			use_bias=True,
+		)(net1)
+		net1 = tf.keras.layers.Flatten()(net1)
+
+		# Hand-crafted features
+		net2 = custom_features
+		net2 = tf.keras.layers.Dense(
+			20,
+			activation=tf.keras.activations.relu,
+			use_bias=True,
+		)(net2)
+		net2 = tf.keras.layers.Dense(
+			10
+		)(net2)
+
+		net = tf.keras.layers.Concatenate()([net1,net2])
+		print(net.shape)
+
+		net = tf.keras.layers.Dense(
+			self.output_shape,
+			activation=tf.keras.activations.softmax,
+			#use_bias=True,
+		)(net)
+
+		self.outputs = net
+
+
 
 class QOE_Classifier:
 	def __init__(self):
 		self.features_dir = "./features"
 		self.metadata_dir = METADATA_DIR
+		self.fig_dir = "./figures"
+		self.figure_prefix = ""
 		self.pcap_dir = "./pcaps"
 		self.train_proportion = .8
-		self.history_length = 100
+		# Shape of the input byte statistics image
+		self.history_length = 10
+		self.n_flows = 5
 		self._types = ["twitch", "netflix", "youtube"]
-		#self._types = ["twitch"]
+		#self._types = ["netflix", "twitch"]
 		self.type_to_label_mapping = {_type : i for i,_type in enumerate(self._types)}
 		self.sessions_to_clean = {t:[] for t in self._types}
-		self.max_dl = float(15e6) # maximum download size -- we divide by this value; could make this depend on the application
+		# maximum download size -- we divide by this value; could make this depend on the application
+		self.max_dl = float(.5e6)
 
 
 		self.X = {"train": {}, "val": {}, "all": []}
@@ -31,6 +93,7 @@ class QOE_Classifier:
 		self.buffer_health_labels = {"high": 2,"medium":1,"low":0}
 		
 		self.label_types = ["quality", "buffer", "state"]
+		self.label_to_label_index = {'quality': 0, 'buffer': 1, 'state': 2}
 		self.quality_string_mappings = {
 			"twitch": {
 				"0x0": self.visual_quality_labels["low"],
@@ -43,18 +106,20 @@ class QOE_Classifier:
 				"640x360": self.visual_quality_labels["low"],
 				"256x144": self.visual_quality_labels["low"],
 				"284x160": self.visual_quality_labels["low"],
+				"1792x1008": self.visual_quality_labels["high"],
 			},
 			"netflix": {
 				"960x540": self.visual_quality_labels["medium"],
 				"1280x720": self.visual_quality_labels["high"],
+				"768x432": self.visual_quality_labels["low"]
 			},
 		}
 
 		self.buffer_intervals = {
 			"twitch": {
-				"low": [0,2],
-				"medium": [2,6],
-				"high": [6,100000],
+				"low": [0,5],
+				"medium": [5,15],
+				"high": [15,100000],
 			},
 			"netflix": {
 				"low": [0,5],
@@ -84,14 +149,23 @@ class QOE_Classifier:
 			# 4-> paused, 8-> playing, 14->loading, 9->rebuffer, 5->(i think) paused, low buffer
 			# https://support.google.com/youtube/thread/5642614?hl=en for lengthy discussion
 			"youtube": {
-				"4": self.state_labels["good"], 
-				"8": self.state_labels["good"], 
-				"14": self.state_labels["good"], 
-				"9": self.state_labels["bad"], 
-				"5": self.state_labels["bad"]
+				"4": self.state_labels["good"], # paused, but ready to play
+				"8": self.state_labels["good"], # playing
+				"14": self.state_labels["good"],  # loading data
+				"9": self.state_labels["bad"],  # playing/loading
+				"5": self.state_labels["bad"], # paused/loadng
+				"19": self.state_labels["bad"], # Low buffer / buffering
+				"49": self.state_labels["good"], # Choose a new video
 			}
 		}
 		self.all_labels = {"quality": self.visual_quality_labels, "buffer": self.buffer_health_labels, "state": self.state_labels}
+		self.actual_vals = None
+		self.vc = Video_Classifier_v2()
+
+		# Model parameters
+		self.batch_size = 64
+		self.learning_rate = .01
+		self.num_epochs = 40
 
 	def cleanup(self):
 		""" Log files, pcaps, etc.. may be accidentally deleted over time. Get rid of these in examples, since we are missing information."""
@@ -103,6 +177,31 @@ class QOE_Classifier:
 				del these_features[_id]
 			pickle.dump(these_features, open(fn,'wb'))
 
+	def get_augmented_features(self, features):
+		""" Perform data augmentation, to increase the number of examples we have. """
+		all_permutations = list(itertools.permutations(list(range(self.n_flows))))
+
+		perm = all_permutations[np.random.randint(len(all_permutations))]
+		# The order of the rows is meaningless, so we can permute them for more data
+		permed_time = features[perm,:,:]
+		other_features = np.expand_dims(features[-1,:,:], axis=0)
+		permutated_features = np.concatenate([permed_time,other_features],axis=0)
+		return permutated_features
+
+	def get_train_iterator(self):
+		# Shuffle the data
+		perm = list(range(len(self.Y['train'])))
+		np.random.shuffle(perm)
+		self.X['train'] = self.X['train'][perm]
+		self.Y['train'] = self.Y['train'][perm]
+
+		cat_y_train = list(map(tf.keras.utils.to_categorical,[self.Y["train"]]))[0]
+		
+
+		for lab, ex in zip(cat_y_train, self.X['train']):
+			aug_ex = self.get_augmented_features(ex)
+			yield aug_ex, lab
+
 	def get_qoe_label(self, example, i, _type):
 		def buffer_health_to_label(buffer_health_seconds):
 			for quality in self.buffer_intervals[_type]:
@@ -113,6 +212,7 @@ class QOE_Classifier:
 		# i = 0 -> first report; each additional index corresponds to T_INTERVAL seconds
 		t_start = float(example["stats_panel"][0]["timestamp"])
 		found=False
+		# Finds the first report that occurs after the interval of interest
 		for j, report in enumerate(example["stats_panel"]):
 			if i * T_INTERVAL <= (float(report["timestamp"]) - t_start):
 				found=True
@@ -134,6 +234,8 @@ class QOE_Classifier:
 			quality_label = self.quality_string_mappings[_type][quality]
 		elif _type == "youtube":
 			# youtube tells you what the maximum quality is, so we treat it differently
+			if quality == "0x0":
+				return None
 			try:
 				experienced,optimal = quality.split("/")
 			except:
@@ -157,121 +259,212 @@ class QOE_Classifier:
 		else:
 			raise ValueError("Type {} not implemented in labeling.".format(_type))
 
-		state_label = self.video_states[_type][state]
+		try:
+			state_label = self.video_states[_type][state]
+		except KeyError:
+			print("Note -- state {} for type {} not found, returning.".format(state, _type))
+			return None
 
+		# Some types of labels don't make sense, set these to None
+		# If video is paused or buffered, quality is undefined
+		if state_label == self.state_labels['bad']:
+			quality_label = self.visual_quality_labels['low']
+
+		self.actual_vals = [quality, buffer_health, state]
 		label = [quality_label, buffer_health_label, state_label]
 		return label
 
 	def train_and_evaluate(self, label_type):
-		cat_y_train,cat_y_val = map(tf.keras.utils.to_categorical,[self.Y["train"], self.Y["val"]])
-		model = tf.keras.models.Sequential()
-		model.add(tf.keras.layers.Conv2D(
-			5,
-			(5,5),
-			strides=(1,1),
-			padding='valid',
-			activation=tf.keras.activations.relu,
-			use_bias=True,
-		))
-		model.add(tf.keras.layers.Conv2D(
-			3,
-			(1,5),
-			strides=(1,3),
-			padding='valid',
-			#activation=tf.keras.activations.relu,
-			use_bias=True,
-		))
-		model.add(tf.keras.layers.Flatten())
-		model.add(tf.keras.layers.Dropout(rate=.15))
-		model.add(tf.keras.layers.Dense(
-			3,
-			activation=tf.keras.activations.softmax,
-			use_bias=True,
-		))
-		model.compile(optimizer=tf.keras.optimizers.Adam(
-			learning_rate=.01
-		), loss='categorical_crossentropy', metrics=['accuracy'])
-		model.fit(self.X["train"], cat_y_train, batch_size=64,validation_data=(self.X["val"], cat_y_val), epochs=40)
-		preds = model.predict(self.X["val"])
+		n_classes = len(self.all_labels[label_type])
+		# Need to make data set lengths a perfect multiple of the number of batches, 
+		# or 'fit' fails
+		n_feed_ins = {}
+		for t in ['train', 'val']:
+			n_feed_ins[t] = int(len(self.X[t]) / self.batch_size)
+			self.X[t] = self.X[t][0:n_feed_ins[t]*self.batch_size]
+			self.Y[t] = self.Y[t][0:n_feed_ins[t]*self.batch_size]
+		cat_y_val = list(map(tf.keras.utils.to_categorical,[self.Y["val"]]))[0]
+		# Get the training data generator obj
+		train_data = tf.data.Dataset.from_generator(self.get_train_iterator, 
+			output_types=(tf.float32, tf.float32),
+			output_shapes=((self.n_flows + 1,self.history_length,2), (n_classes)))
+		train_data = train_data.repeat().batch(self.batch_size)
+		# Get the model object
+		model = K_Model(self.batch_size, self.X['train'][0].shape, n_classes)
+		model.build()
+		# Set up training and validation
+		keras_model = tf.keras.models.Model(inputs=model.inputs, outputs=model.outputs)
+		keras_model.compile(
+			optimizer=tf.keras.optimizers.Adam(
+				learning_rate=.01
+			), 
+			loss='categorical_crossentropy', 
+			metrics=['accuracy', tf.keras.metrics.Precision(), tf.keras.metrics.Recall()])
+		keras_model.fit(train_data,
+			batch_size=self.batch_size,
+			validation_data=(self.X["val"], cat_y_val), 
+			steps_per_epoch=n_feed_ins['train'],
+			epochs=self.num_epochs,
+			verbose=0)
+		preds = keras_model.predict(self.X["val"])
 		preds = np.argmax(preds, axis=1)
-		print(tf.math.confusion_matrix(self.Y["val"], preds, 3))
+		cf = tf.math.confusion_matrix(self.Y["val"], preds, n_classes)
+		print(cf)
+		print(cf/np.transpose(np.tile(np.sum(cf,axis=1), (n_classes,1))))	
+
+		# Visualize incorrect preds
+		n_to_plot = 10
+		incorrects = []
+		for pred, lab, example in zip(preds, self.Y['val'], self.X['val']):
+			if pred != lab:
+				incorrects.append((example,[pred,None,None],[lab,None,None]))
+			if len(incorrects) == n_to_plot:
+				self.visualize_example(np.random.random(), incorrects)
+				incorrects = []
 
 	def make_train_val(self):
 		# Creates self.X (train, val) and self.Y (train, val)
+		print("Making train-val.")
 		for _type in self.data:
 			for example in self.data[_type]:
-				# populate features
-				# get the asn list at each point in time
-				try:
-					raw_byte_stats = pickle.load(open(os.path.join(self.pcap_dir, "{}_processed.pkl".format(example["_id"])),'rb'))
-				except FileNotFoundError:
-					print("Type: {}, ID: {} not found".format(_type,example["_id"]))
-					self.sessions_to_clean[_type].append(example["_id"])
-					continue
-				byte_stats = example["byte_statistics"]
+				
+				# Load byte statistics, and create a set of features of constant shape
+				# we can use as input to the model
+				byte_statistics = example["byte_statistics"]
+
+				# Limit to only video flows
+				all_feats = []
+				for flow in byte_statistics[0].keys():
+					video_ex = example["video_identification_features"][flow]
+					all_feats.append((flow, self.vc.get_features(video_ex)))
+				all_feats = [el for el in all_feats if el[1]]
+				all_labs = self.vc.predict([el[1] for el in all_feats])
+				
+				# This is non-causal as coded, but a causal version 
+				# would provide an equivalent result
+				# The actual implementation of this process would be so different, it
+				# doesn't really matter
+				all_flows = [flow for lab, (flow, feat) in zip(all_labs, all_feats) if lab]
+
+				# Time into the packet captures that we start recording 
+				# video playback statistics
+				t_start_recording_offset = example["start_offset"]
+				bin_start = int(np.floor(t_start_recording_offset / T_INTERVAL))
+				n_bins = len(byte_statistics[0][list(all_flows)[0]])
+				byte_stats = np.zeros((self.n_flows, n_bins, 2)) 
+				# dict with self.n_flows keys; each key is index of flow in 
+				# all_flows -> row in byte_stats this flow occupies
+				current_best_n = {} 
+
+				# If we have fewer than self.n_flows video flows in total (over the whole session), 
+				# Append some dummy (zero) information
+				if len(all_flows) < self.n_flows:
+					n_to_add = self.n_flows - len(all_flows)
+					for i in range(n_to_add):
+						byte_statistics[0][i,i] = np.zeros((n_bins))
+						byte_statistics[1][i,i] = np.zeros((n_bins))
+						all_flows.append((i,i))
+
+				active_flows = {}
+				for i in range(n_bins):
+					sum_flows = []
+					for flow in all_flows:
+						if i < self.history_length:
+							s = 0
+						else:
+							s = i - self.history_length + 1
+						up_data = np.sum(byte_statistics[0][flow][s:i+1])
+						down_data = np.sum(byte_statistics[1][flow][s:i+1])
+						sum_flows.append(up_data + down_data)
+					# Record which flows are active for later
+					active_flows[i] = {flow: sum_flows[j] > 0 for j, flow in enumerate(all_flows)}
+					# Indices of highest data transferred N flows in 
+					# all_flows
+					best_n = np.argpartition(sum_flows,-1*self.n_flows)[-1*self.n_flows:]
+					if current_best_n == {}:
+						current_best_n = {best: i for i,best in enumerate(best_n)}
+					if set(best_n) != set(current_best_n.keys()):
+						new_best_flows = get_difference(best_n, current_best_n.keys())
+						flows_to_remove = get_difference(current_best_n.keys(), best_n)
+						for add_flow, remove_flow in zip(new_best_flows, flows_to_remove):
+							i_of_new_flow = current_best_n[remove_flow]
+							del current_best_n[remove_flow]
+							current_best_n[add_flow] = i_of_new_flow
+					#print("i: {}, SF: {}, best n: {}, {}".format(i, sum_flows, best_n, [sum_flows[j] for j in best_n]))
+					for k in best_n:
+						for j in [0,1]:
+							byte_stats[current_best_n[k]][i][j] = byte_statistics[j][all_flows[k]][i]
 				size_byte_stats = byte_stats.shape
-				for i in range(size_byte_stats[1]):
-					# if i % 20 != 0:
-					# 	continue
-					# get the ips who have been communicated with up until this point (i.e. the IPs that we know about, enforcing causality)
-					all_flows = []
-					for dst_ip in raw_byte_stats[0]:
-						for src_port in raw_byte_stats[0][dst_ip]:
-							if sum(raw_byte_stats[0][dst_ip][src_port][0:i] + sum(raw_byte_stats[1][dst_ip][src_port][0:i])) > 0:
-								all_flows.append((dst_ip,src_port))
-					if all_flows == []: # no data transfer at all yet
+				to_viz, n_to_plot = [], 40
+				for i in range(bin_start, size_byte_stats[1] - self.history_length):
+					# Get flows active up to this point
+					active_flows_now = active_flows[i]
+					if sum(active_flows_now.values()) == 0:
 						continue
-					asns = {}
-					with geoip2.database.Reader(os.path.join(self.metadata_dir,"GeoLite2-ASN.mmdb")) as reader:
-						for dst_ip,src_port in all_flows:
-							try:
-								response = reader.asn(dst_ip)
-							except geoip2.errors.AddressNotFoundError:
-								continue
-							asn = response.autonomous_system_organization
 
-							try:
-								asns[asn] += 1 # could weight by the amount of traffic
-							except KeyError:
-								asns[asn] = 1
-					n_asns = len(asns)
-					asn_dist = get_asn_dist(asns)
-					ip_likelihood = get_ip_likelihood(list(set([el[0] for el in all_flows])), _type)
-					
-					
-					temporal_image = np.zeros((size_byte_stats))	
+					# Form hand-crafted features
+					# Total bytes for each flow
+					total_bytes = np.sum(np.sum(byte_stats[:,0:i+1,:], axis=1),axis=1)
+					other_features = total_bytes / self.max_dl
+					# End handcrafted features
+
+					# Form temporal image, showing byte transfers
 					# only reveal up to the current timestep
-					temporal_image[:,-i:,:] = byte_stats[:,0:i,:]
-					temporal_image = temporal_image[:,-self.history_length:,:]
-					if np.max(np.max(np.max(temporal_image))) == 0: # TODO - this shouldn't occur
-						continue
-					# normalize between 0 and 1, cheating here; perhaps find a reasonable number to divide by for all files
-					# could max out byte counts for unexpectedly high counts
-					temporal_image /= self.max_dl
 
-					other_features = [el for el in ip_likelihood]
-					[other_features.append(el) for el in asn_dist]
-					other_features.append(n_asns)
+					# HAVE TO BE CAREFUL BECAUSE SLICING IS ASSIGNING BY REFERENCE
+					tmp = byte_stats[:,0:i,:]
+					
+					if i < self.history_length:
+						# Fill in non-existent past with zeros
+						tmp2 = np.concatenate([
+							np.zeros((self.n_flows, self.history_length - i, 2)),
+							tmp], axis=1)
+					else:
+						tmp2 = tmp[:,-self.history_length:,:]
+						
+
+					# Clip between 0 and 1 (not guaranteed, but likely)
+					temporal_image = tmp2 / self.max_dl
 
 					# label for this time step
-					lab = self.get_qoe_label(example,i, _type)
+					lab = self.get_qoe_label(example,i - bin_start, _type)
+					actual_vals = self.actual_vals
 					if lab is None:
 						continue
+					if False:
+						to_viz.append((temporal_image,lab,actual_vals))
+						if len(to_viz) == n_to_plot:
+							self.visualize_example("{}-{}".format(_type, example['_id']), 
+								to_viz)
+							exit(0)
 
-					self.X["all"].append([temporal_image, other_features])
+					# append these features at the bottom of the image, for convenience
+					filler = np.zeros((1,self.history_length,2))
+					filler[0,0:len(other_features),0] = other_features
+					features = np.append(temporal_image, filler, axis=0)
+					self.X["all"].append(features)
 					self.Y["all"].append(lab)
 					self.metadata["all"].append((i, _type)) # timestep, type
 
 		self.X["train"], self.Y["train"], self.X["val"], self.Y["val"] = get_even_train_split(
 			self.X["all"], self.Y["all"], self.train_proportion)
+		# Change the keys from integers to strings for readability
+		for tv in ["train", "val"]:
+			for i, _problem_type in enumerate(self.label_types):
+				self.X[tv][_problem_type] = self.X[tv][i]
+				self.Y[tv][_problem_type] = self.Y[tv][i]
+				del self.X[tv][i]
+				del self.Y[tv][i]
 
 	def save_train_val(self):
 		# saves the training and validation sets to pkls
-		# each label type gets its own train + val set, since each will get its own classifier (at least for now)
-		for i,label in enumerate(self.label_types):
-			train = {"X": self.X["train"][label], "Y": self.Y["train"][label]}
-			val = {"X": self.X["val"][label], "Y": self.Y["val"][label]}
-			t_fn, v_fn = os.path.join(self.features_dir, "{}-{}.pkl".format(label,"train")), os.path.join(self.features_dir,"{}-{}.pkl".format(label,"val"))
+		# each label_type type gets its own train + val set, since each will get its own classifier (at least for now)
+		for i,label_type in enumerate(self.label_types):
+			train = {'X': self.X['train'][label_type], 'Y':self.Y['train'][label_type]}
+			val = {'X': self.X['val'][label_type], 'Y':self.Y['val'][label_type]}
+			t_fn, v_fn = os.path.join(self.features_dir, "{}-{}.pkl".format(
+				label_type,"train")), os.path.join(self.features_dir,"{}-{}.pkl".format(
+				label_type,"val"))
 			pickle.dump(train, open(t_fn,'wb'))
 			pickle.dump(val, open(v_fn,'wb'))
 
@@ -291,13 +484,51 @@ class QOE_Classifier:
 			t_fn, v_fn = os.path.join(self.features_dir, "{}-{}.pkl".format(label_type,"train")),\
 				os.path.join(self.features_dir,"{}-{}.pkl".format(label_type,"val"))
 			t, v = pickle.load(open(t_fn,'rb')), pickle.load(open(v_fn,'rb'))
-			self.X["train"], self.Y["train"] = np.array([el[0] for el in t["X"]]), np.array(t["Y"])
-			self.X["val"], self.Y["val"] = np.array([el[0] for el in v["X"]]), np.array(v["Y"])
+			self.X["train"], self.Y["train"] = np.array(t['X']), np.array(t["Y"])
+			self.X["val"], self.Y["val"] = np.array(v['X']), np.array(v["Y"])
+			# Shuffle validation
+			perm = list(range(len(self.X['val'])))
+			perm = np.random.permutation(perm)
+			self.X['val'] = self.X['val'][perm]
+			self.Y['val'] = self.Y['val'][perm]
 		else:
 			raise ValueError("dtype {} not understood".format(dtype))
 
+	def visualize_example(self, _id, examples):
+		# Show bytes / time, along with label
+		base = 2	
+		ar = self.history_length / self.n_flows
+		plt.rcParams.update({"figure.figsize": [base*ar,base*int(1.5*len(examples))]})
+		fig, ax = plt.subplots(len(examples),1)
+		i=0
+		for temporal_image, label, actual_vals in examples:
+			im = ax[i].imshow(np.sum(temporal_image[0:-1,:,:], axis=2), vmin=0, vmax=1)
+			ax[i].set_title("Quality: {} ({}), Buffer: {} ({}), State: {} ({})".format(
+				label[0],actual_vals[0],label[1],actual_vals[1], label[2],actual_vals[2]))
+			ax[i].set_xlabel("Time")
+			ax[i].set_ylabel("Flow Index")
+			i += 1
+		fig.subplots_adjust(right=.8)
+		cbar_ax = fig.add_axes([.85,.15,.05,.07])
+		fig.colorbar(im, cax=cbar_ax)
+
+		
+		self.save_fig("ex_visualization_{}.pdf".format(_id))
+		if np.random.random() > .7:
+			exit(0)
+
+	def save_fig(self, fig_file_name,tight=False):
+		# helper function to save to specific figure directory
+		if not tight:
+			plt.savefig(os.path.join(self.fig_dir, self.figure_prefix + fig_file_name))
+		else:
+			plt.savefig(os.path.join(self.fig_dir, self.figure_prefix + fig_file_name), 
+				bbox_inches='tight', pad_inches=.5)
+		plt.clf()
+		plt.close()
+
 	def run(self, label_type):
-		if not os.path.exists(os.path.join(self.features_dir, "{}-train.pkl".format(label_type))):
+		if True:#not os.path.exists(os.path.join(self.features_dir, "{}-train.pkl".format(label_type))):
 			# only do this if we need to
 			self.load_data('raw')
 			self.make_train_val()
@@ -309,7 +540,7 @@ class QOE_Classifier:
 
 def main():
 	qoec = QOE_Classifier()
-	qoec.run('quality')
+	qoec.run('buffer')
 
 if __name__ == "__main__":
 	main()

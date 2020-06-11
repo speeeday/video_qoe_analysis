@@ -136,8 +136,10 @@ def get_even_train_split(all_x, all_y, train_proportion, verbose=True):
 		if len(c) - 1 != np.max(these_labels):
 			raise ValueError("You need at least two examples for each sub-class.")
 		limiting_factor = np.min(c)
+		limiting_subclass = np.argmin(c)
 		if verbose:
-			print("Limiting number for problem type {} is {} examples.".format(problem_type, limiting_factor))
+			print("Limiting number for problem type {} is {} examples, subclass {}.".format(
+				problem_type, limiting_factor, limiting_subclass))
 		examples_by_label = [np.array([x for x,_y in zip(all_x, these_labels) if _y == y]) for y in range(num_sub_classes)]
 		# Number of examples of each sub-class to use in the training set
 		n_to_pull = int(limiting_factor*train_proportion)

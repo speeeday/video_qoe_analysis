@@ -12,7 +12,7 @@ from constants import *
 
 class Data_Gatherer:
 	def __init__(self):
-		self.n_to_collect = 200 # number of videos or sessions to visit
+		self.n_to_collect = 100 # number of videos or sessions to visit
 		# Load credentials
 		self.netflix_login_url = "https://www.netflix.com/login"
 		self.netflix_username = open('credentials/netflix_username.txt').read().strip('\n').split('\n')[0]
@@ -25,7 +25,7 @@ class Data_Gatherer:
 			call("rm {}/*.pcap".format(PCAP_DIR), shell=True)
 			call("rm {}/*".format(LOG_DIR), shell=True)
 
-		self.tc = False # whether or not to run traffic control, encourages more interesting experiments
+		self.tc = True # whether or not to run traffic control, encourages more interesting experiments
 		self.run_each = { # whether or not I want to run data collection for each service
 			"netflix": True,
 			"youtube": True,
