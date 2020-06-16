@@ -87,7 +87,7 @@ class Data_Aggregator:
 		total_time = t_end - t_start
 		n_bins = int(np.ceil(total_time / self.t_interval))
 		self.n_bins = n_bins
-		self.bytes_transfered = [{}, {}] # up, down, each of which are dicts: dst/src ip -> [bytes received during time chunks]
+		self.bytes_transfered = [{}, {}, {}, {}] # up bytes, down bytes, up flags, down flags
 
 		pcap_file = dpkt.pcap.Reader(open(pcap_file_name,'rb'))
 		port_amts = {}
@@ -120,6 +120,9 @@ class Data_Aggregator:
 				bin_of_interest = int(np.floor(((ts - t_start) / self.t_interval)))
 				self.bytes_transfered[0][dst_ip, source_port][bin_of_interest] += ip_pkt.len
 
+				# record flags
+
+
 			elif self.is_internal(dst_ip):
 				# incoming packet
 				try:
@@ -128,6 +131,9 @@ class Data_Aggregator:
 					self.bytes_transfered[1][src_ip, dest_port] =np.zeros(n_bins)
 				bin_of_interest = int(np.floor(((ts - t_start) / self.t_interval)))
 				self.bytes_transfered[1][src_ip,dest_port][bin_of_interest] += ip_pkt.len
+
+				# record flags
+
 			else:
 				print("Neither src: {} nor dst: {} are internal...".format(src_ip, dst_ip))
 
@@ -140,6 +146,7 @@ class Data_Aggregator:
 						self.bytes_transfered[1-i][ip]
 					except KeyError:
 						self.bytes_transfered[1-i][ip] = np.zeros(n_bins)
+		exit(0)
 
 	def per_flow_video_classifier(self, _id):
 		pcap_file_name = os.path.join(self.pcap_dir, "{}_{}.pcap".format(self.type,_id))

@@ -107,7 +107,7 @@ def get_cdf_xy(data, logx=False, logy=False, n_points = 500, weighted=False):
 
 	return [x, cdf_data]
 
-def get_even_train_split(all_x, all_y, train_proportion, verbose=True):
+def get_even_train_split(all_x, all_y, all_metadata, train_proportion, verbose=True, is_dist=False):
 	# forms train and validation sets
 	# y is an array of labels, for various problem types
 	# each problem type is limited by a sub-class (the one with the least examples)
@@ -116,6 +116,9 @@ def get_even_train_split(all_x, all_y, train_proportion, verbose=True):
 
 	# returns x_train, y_train, x_val, y_val
 	# each x,y -> problem_type -> examples, labels
+
+	# if is_dist is true, each element of y is a list of distributions, where each 
+	# distrbution represents the label for that example
 
 	n_problem_types = len(all_y[0])
 	X = {
@@ -126,21 +129,37 @@ def get_even_train_split(all_x, all_y, train_proportion, verbose=True):
 		"train": {i: [] for i in range(n_problem_types)},
 		"val": {i: [] for i in range(n_problem_types)},
 	}
+	metadata = {
+		"train": {i: [] for i in range(n_problem_types)},
+		"val": {i: [] for i in range(n_problem_types)},
+	}
 
 	for problem_type in range(n_problem_types):
 		these_labels = [_y[problem_type] for _y in all_y]
 		# Number of classes for this problem type
-		num_sub_classes = len(set(these_labels))
+		if is_dist:
+			num_sub_classes = len(these_labels[0])
+		else:
+			num_sub_classes = len(set(these_labels))
 		# Get the limiting sub-class for this problem type
-		u, c = np.unique(these_labels, return_counts = True)
-		if len(c) - 1 != np.max(these_labels):
+		if is_dist:
+			# Count the distribution as belonging to the class associated with the 
+			# most common label
+			these_labels_int = [np.argmax(el) for el in these_labels]
+		else:
+			these_labels_int = these_labels
+		u, c = np.unique(these_labels_int, return_counts = True)
+		if len(c) - 1 != np.max(these_labels_int):
 			raise ValueError("You need at least two examples for each sub-class.")
 		limiting_factor = np.min(c)
 		limiting_subclass = np.argmin(c)
 		if verbose:
 			print("Limiting number for problem type {} is {} examples, subclass {}.".format(
 				problem_type, limiting_factor, limiting_subclass))
-		examples_by_label = [np.array([x for x,_y in zip(all_x, these_labels) if _y == y]) for y in range(num_sub_classes)]
+		if is_dist:
+			examples_by_label = [[(x,_y, md) for x,_y, md in zip(all_x, these_labels, all_metadata) if np.argmax(_y) == y] for y in range(num_sub_classes)]
+		else:
+			examples_by_label = [[(x,_y, md) for x,_y, md in zip(all_x, these_labels, all_metadata) if _y == y] for y in range(num_sub_classes)]
 		# Number of examples of each sub-class to use in the training set
 		n_to_pull = int(limiting_factor*train_proportion)
 		example_indices_by_class = {}
@@ -152,6 +171,7 @@ def get_even_train_split(all_x, all_y, train_proportion, verbose=True):
 		# Fill in the examples & labels, given the indices for each sub-class
 		for k in example_indices_by_class:
 			for i,example_indices in enumerate(example_indices_by_class[k]):
-				[X[k][problem_type].append(examples_by_label[i][j]) for j in example_indices]
-				Y[k][problem_type] += [i] * len(example_indices)
-	return X["train"], Y["train"], X["val"], Y["val"]
+				[X[k][problem_type].append(examples_by_label[i][j][0]) for j in example_indices]
+				[Y[k][problem_type].append(examples_by_label[i][j][1]) for j in example_indices]
+				[metadata[k][problem_type].append(examples_by_label[i][j][2]) for j in example_indices]
+	return X["train"], Y["train"], X["val"], Y["val"], metadata['train'], metadata['val']

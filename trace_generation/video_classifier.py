@@ -17,6 +17,7 @@ class Video_Classifier_v2:
 		self.metadata_dir = METADATA_DIR
 		self.train_proportion = .8
 		self._types = ["twitch", "netflix", "youtube"]
+		self.type_to_class = {t:i+1 for i,t in enumerate(self._types)}
 		#self._types = ["netflix"]
 		self.type_to_label_mapping = {_type : i for i,_type in enumerate(self._types)}
 		self.max_tpt = float(15e6) # maximum download size -- we divide by this value; could make this depend on the application
@@ -25,9 +26,9 @@ class Video_Classifier_v2:
 		self.Y = {"train": {}, "val": {}, "all": []}
 		self.metadata = {"train": [], "val": [], "all": []} # contains info about each example, in case we want to sort on these values
 
-		self.label_types = ["video_class"]
+		self.label_types = ["video_class", "type_class"]
 		self.data = {_type: [] for _type in self._types}
-		self.all_labels = {"video_class": [0,1]}
+		self.all_labels = {"video_class": [0,1], "type_class": [0,1,2,3]}
 
 		# Feature processing
 		self.no_feature = -1
@@ -45,14 +46,18 @@ class Video_Classifier_v2:
 			print("Computing metrics...")
 			y_pred = clf.predict(self.X["val"][p_type])
 			
-			
 			conf_mat = confusion_matrix(self.Y["val"][p_type], y_pred)
-			accuracy = accuracy_score(self.Y["val"][p_type], y_pred)
-			prec = precision_score(self.Y["val"][p_type], y_pred)
-			rec = recall_score(self.Y["val"][p_type], y_pred)
-			f1 = f1_score(self.Y["val"][p_type], y_pred)
-			print("Conf Mat: {} \n\n Accuracy: {}".format(conf_mat, accuracy))
-			print("Precision: {}, Recall: {}, F1: {}".format(prec, rec, f1))
+			normalized_cf = conf_mat/np.transpose(np.tile(np.sum(conf_mat,axis=1), (conf_mat.shape[1],1)))
+			normalized_acc = 1 -sum(normalized_cf[i,j] for i in range(conf_mat.shape[0]) for j in range(conf_mat.shape[1])if i != j)
+			try:
+				prec = precision_score(self.Y["val"][p_type], y_pred)
+				rec = recall_score(self.Y["val"][p_type], y_pred)
+				f1 = f1_score(self.Y["val"][p_type], y_pred)
+				print("Precision: {}, Recall: {}, F1: {}".format(prec, rec, f1))
+			except ValueError:
+				pass
+			print("Conf Mat: {} \n\n Accuracy: {}".format(normalized_cf, normalized_acc))
+			
 
 			# visualize predictions
 			self.visualize_data(self.X['val'][p_type], self.Y['val'][p_type], y_pred)
@@ -140,9 +145,9 @@ class Video_Classifier_v2:
 			if "googlevideo.com" in flow_obj["tls_server_hostname"]:
 				tls = 1
 			elif "nflxvideo.net" in flow_obj["tls_server_hostname"]:
-				tls = 1
+				tls = 2
 			elif "ttvnw.net" in flow_obj["tls_server_hostname"]:
-				tls = 1
+				tls = 3
 			else:
 				tls = 0
 		except KeyError:
@@ -161,7 +166,7 @@ class Video_Classifier_v2:
 		# 	fft_feats = [-1] * n_fft_to_keep
 		# features = features + fft_feats
 
-		features = [total_bytes, tb_up, tb_down, mean_tpt, max_tpt, std_tpt, tls]
+		features = [total_bytes, tb_up, tb_down, mean_tpt, max_tpt, std_tpt, tls, int(tls>0)]
 
 		return features
 
@@ -179,10 +184,11 @@ class Video_Classifier_v2:
 					features = self.get_features(this_ex)
 					if not features:
 						continue
-					lab = int(this_ex["is_video"])
-					
+					is_video_lab = int(this_ex["is_video"])
+					type_lab  = is_video_lab * self.type_to_class[_type]
+
 					self.X["all"].append(features)
-					self.Y["all"].append((lab,))
+					self.Y["all"].append((is_video_lab,type_lab))
 					self.metadata["all"].append((_type,)) # type
 
 		self.X["train"], self.Y["train"], self.X["val"], self.Y["val"] = get_even_train_split(self.X["all"], self.Y["all"], self.train_proportion)
