@@ -22,7 +22,7 @@ class Youtube_Video_Loader:
 		self.early_stop = 10 # how long before the end of the video to stop (seconds)
 		# how many consecutive iterations of the same video progress before we declare an error
 		# TODO - remove
-		self.max_pb_ctr_allowance = 10 
+		self.max_pb_ctr_allowance = 4
 
 		self.max_time = MAX_TIME
 
@@ -31,6 +31,7 @@ class Youtube_Video_Loader:
 		#chrome_options.add_extension(CHROME_ADBLOCK_LOCATION) doesn't work in headless chrome
 		chrome_options.binary_location = CHROME_BINARY_LOCATION
 		chrome_options.add_argument("--window-size=2000,3555") # Needs to be big enough to get all the resolutions
+		chrome_options.add_argument("--disable-quic")
 		caps = webdriver.common.desired_capabilities.DesiredCapabilities.CHROME
 		caps['goog:loggingPrefs'] = {'performance': 'ALL'}
 		self.driver = webdriver.Chrome(chrome_options=chrome_options, desired_capabilities=caps)
@@ -58,6 +59,7 @@ class Youtube_Video_Loader:
 
 	def get_rid_of_ads(self):
 		# Check to see if there are ads
+		print("Checking for ads.")
 		try:
 			self.driver.find_element_by_css_selector(".video-ads")
 		except:
@@ -203,7 +205,9 @@ class Youtube_Video_Loader:
 				raise ValueError("Couldn't find stats for nerds box.")
 
 			# get video length
+			i=0
 			while True:
+				print("Finding video length.")
 				video_length = self.driver.find_element_by_css_selector('.ytp-time-duration').text.split(":")
 				try:
 					video_length = 60 * int(video_length[0]) + int(video_length[1])
@@ -212,6 +216,9 @@ class Youtube_Video_Loader:
 					actions = webdriver.common.action_chains.ActionChains(self.driver)
 					actions.move_to_element(player)  # bring up the video length box again
 					actions.perform()
+					if i == max_n_tries:
+						raise ValueError("Couldn't find video length: {}".format(video_length))
+					i+=1
 
 			tick=time.time()
 			self.video_statistics[link]["metadata"]["start_wait"] = tick - self.t_initialize
@@ -237,6 +244,7 @@ class Youtube_Video_Loader:
 				else:
 					time.sleep(.5)
 					print("Didn't match regex: {}".format(video_stats_text))
+					continue
 				try:
 					state = int(mystery_text) # 4 -> paused, 5 -> paused&out of buffer, 8 -> playing, 9 -> rebuffering
 				except ValueError:
@@ -254,7 +262,7 @@ class Youtube_Video_Loader:
 				if np.random.random() > .8:
 					print("Res : {} Buf health: {} plbck progress: {}".format(
 						current_optimal_res, buffer_health, video_progress))
-				if last_playback_progress:
+				if last_playback_progress is not None and buffer_health > .5:
 					if video_progress == last_playback_progress:
 						no_pb_progress_ctr += 1
 					else:

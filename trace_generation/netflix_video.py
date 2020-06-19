@@ -1,74 +1,3 @@
-# # need SSIM, # of changes, rebuffer time, minimize startup delay
-# from selenium import webdriver
-# import sys
-# import time
-# import os
-
-# # Usage: python netflix_video.py [video link]
-# #
-# # Make sure to provide the video link within quotes "" via the command
-# # line because the link often contains shell characters in it
-# #
-# # Make sure you have two files present in the same directory as this file:
-# #    credentials/netflix_username.txt - username of a valid netflix subscription
-# #    credentials/netflix_password.txt - password for the valid netflix subscription
-
-# chrome_options = webdriver.ChromeOptions();
-# # chrome_options.add_argument("--no-gpu")
-# # chrome_options.add_argument("--no-sandbox")
-# # chrome_options.add_argument("--disable-setuid-sandbox")
-# chrome_options.add_argument("--headless")
-# chrome_options.binary_location = "/usr/bin/google-chrome"
-
-
-# caps = webdriver.common.desired_capabilities.DesiredCapabilities.CHROME
-# caps['goog:loggingPrefs'] = {'performance': 'ALL'}
-
-# driver = webdriver.Chrome(chrome_options=chrome_options, desired_capabilities=caps)
-
-# driver.get("https://www.netflix.com/login")
-# assert "Netflix" in driver.title
-
-# os.system("./preserve_logs.sh")
-
-# my_username = open('credentials/netflix_username.txt').read().strip('\n').split('\n')[0]
-# my_password = open('credentials/netflix_password.txt').read().strip('\n').split('\n')[0]
-
-# username = driver.find_element_by_id("id_userLoginId")
-# username.clear()
-# username.send_keys(my_username)
-
-# password = driver.find_element_by_id("id_password")
-# password.clear()
-# password.send_keys(my_password)
-
-# #driver.find_element_by_xpath('//button').click()
-
-# driver.find_element_by_class_name("btn-submit").click()
-
-# time.sleep(3)
-
-# driver.find_elements_by_class_name("profile-icon")[1].click()
-
-# #print driver.find_element_by_xpath("//input[@data-uia='login-submit-button']")
-# #driver.find_element_by_class_name("btn login-button btn-submit btn-small").click()
-
-# time.sleep(5)
-
-
-# if len(sys.argv) > 1:
-#     link = sys.argv[1]
-#     print("[INFO]: Starting Netflix Video at link: {}".format(link))
-#     driver.get(link)
-    
-# DISCONNECTED_MSG = 'Unable to evaluate script: disconnected: not connected to DevTools\n'
-
-# while True:
-#     if driver.get_log('driver') != [] and driver.get_log('driver')[-1]['message'] == DISCONNECTED_MSG:
-#         print('Browser window closed by user')
-#         break
-#     time.sleep(1)
-
 from selenium import webdriver
 from selenium import common
 import sys
@@ -98,7 +27,7 @@ class Netflix_Video_Loader:
 			#chrome_options.add_extension(CHROME_ADBLOCK_LOCATION) doesn't work in headless chrome
 			chrome_options.binary_location = CHROME_BINARY_LOCATION
 			chrome_options.add_argument("--window-size=2000,3555") # Needs to be big enough to get all the resolutions
-
+			chrome_options.add_argument("--disable-quic")
 			caps = webdriver.common.desired_capabilities.DesiredCapabilities.CHROME
 			caps['goog:loggingPrefs'] = {'performance': 'ALL'}
 			self.driver = webdriver.Chrome(chrome_options=chrome_options,service_args=["--verbose","--log-path=/home/ubuntu/video_qoe_analysis/trace_generation/chrome_log.log"],desired_capabilities=caps)
@@ -203,13 +132,8 @@ class Netflix_Video_Loader:
 					player = self.driver.find_element_by_css_selector(".VideoContainer")
 					break
 				except:
-					# if time.time() - t_since_last_fetched > 10:
-					# 	self.driver.save_screenshot("long_wait.png")
-					# 	print("Fetching again")
-					# 	self.driver.get(link)
-					# 	t_since_last_fetched = time.time()
 					self.save_screenshot("video_container_wait.png")
-					time.sleep(1)
+					time.sleep(3)
 					if n_tries > 10:
 						print("Maximum number of tries reached, exiting.")
 						return

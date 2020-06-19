@@ -12,7 +12,7 @@ from constants import *
 
 class Data_Gatherer:
 	def __init__(self):
-		self.n_to_collect = 100 # number of videos or sessions to visit
+		self.n_to_collect = 150 # number of videos or sessions to visit
 		# Load credentials
 		self.netflix_login_url = "https://www.netflix.com/login"
 		self.netflix_username = open('credentials/netflix_username.txt').read().strip('\n').split('\n')[0]
@@ -27,8 +27,8 @@ class Data_Gatherer:
 
 		self.tc = True # whether or not to run traffic control, encourages more interesting experiments
 		self.run_each = { # whether or not I want to run data collection for each service
-			"netflix": True,
-			"youtube": True,
+			"netflix": False,
+			"youtube": False,
 			"twitch": True,
 			"no_video": False,
 		}
@@ -64,7 +64,8 @@ class Data_Gatherer:
 		
 		if self.tc:
 			# set up traffic control
-			p = Popen("python limit_throughput.py &", shell=True, preexec_fn=os.setsid)
+			p = Popen("python limit_throughput.py --type {} &".format(
+				_type), shell=True, preexec_fn=os.setsid)
 		# watch the video
 		call(cmd, shell=True)
 		if self.tc:
@@ -74,6 +75,7 @@ class Data_Gatherer:
 		# to prevent space problems, aggregate after each run
 		call("python data_aggregator.py --mode run --type {}".format(
 			_type), shell=True) 
+
 
 	def netflix_login(self):
 		self.driver.get(self.netflix_login_url)

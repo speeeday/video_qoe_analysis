@@ -24,6 +24,7 @@ class Twitch_Video_Loader:
 		chrome_options.add_argument("--headless")
 		chrome_options.binary_location = CHROME_BINARY_LOCATION
 		chrome_options.add_argument("--window-size=2000,3555") # Needs to be big enough to get all the resolutions
+		chrome_options.add_argument("--disable-quic")
 		caps = webdriver.common.desired_capabilities.DesiredCapabilities.CHROME
 		caps['goog:loggingPrefs'] = {'performance': 'ALL'}
 		self.driver = webdriver.Chrome(chrome_options=chrome_options, desired_capabilities=caps)

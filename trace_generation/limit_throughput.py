@@ -2,7 +2,12 @@ from constants import *
 import numpy as np, csv, os, time
 from subprocess import call, check_output
 
-def limit_throughput(file):
+def limit_throughput(file,_type):
+	wait_time = { # how long to wait before restricting bandwidth (allows website to load w.o error)
+		"youtube": 8,
+		"twitch": 8,
+		"netflix": 15,
+	}[_type]
 	traces_dir = TRACES_DIR
 	if file is None:
 		# choose a random file to use
@@ -15,7 +20,8 @@ def limit_throughput(file):
 	total_time = bandwidth_trace[-1,0]
 	t_start = time.time()
 	last_bw_restriction = None
-	time.sleep(4) # give it a little boost for loading the page
+	time.sleep(wait_time) # give it a little boost for loading the page
+	loss = np.random.random() * .1 
 	while True:
 		interval = np.where(int(time.time()-t_start) % total_time >= bandwidth_trace[:,0])[0][-1]
 		bw_restriction = bandwidth_trace[interval][1] # In bytes/sec, convert to Kbps
@@ -23,7 +29,8 @@ def limit_throughput(file):
 		if bw_restriction != last_bw_restriction:
 			# set the new bw restriction
 			#print("Setting bandwidth restriction to {} kbps".format(bw_restriction))
-			call("tcset ens5 --overwrite --rate {}Kbps --direction incoming --src-port 443".format(bw_restriction), shell=True)
+			call("tcset ens5 --overwrite --rate {}Kbps --direction incoming --src-port 443 --loss {}%".format(
+				bw_restriction, loss), shell=True)
 			# outgoing doesn't really matter, since relatively little data is exiting the network
 			#call("tcset ens5 --rate {}Kbps --direction outgoing".format(bw_restriction), shell=True)
 			#print(check_output("tcshow ens5", shell=True))
@@ -34,9 +41,10 @@ def main():
 	import argparse
 	parser = argparse.ArgumentParser()
 	parser.add_argument('--file', action='store', default=None)
+	parser.add_argument('--type', action='store')
 	args = parser.parse_args()
 
-	limit_throughput(args.file)
+	limit_throughput(args.file, args.type)
 
 if __name__ == "__main__":
 	main()

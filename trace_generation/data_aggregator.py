@@ -36,9 +36,19 @@ class Data_Aggregator:
 
 	def cleanup_files(self):
 		# removes log files, pcaps, as they are no longer useful
-
-		call("rm pcaps/{}*".format(self.type), shell=True)
-		call("rm logs/{}*".format(self.type), shell=True)
+		# hangs here sometimes for some reason.
+		max_n_tries, i = 5, 0
+		done = False
+		while not done:
+			try:
+				call("rm pcaps/{}*".format(self.type), shell=True, timeout=10)
+				call("rm logs/{}*".format(self.type), shell=True, timeout=10)
+				done = True
+			except:
+				# timeout expired
+				i += 1
+			if i == max_n_tries:
+				print("Failed to cleanup files -- exiting."); exit(0)
 
 	def is_internal(self, ip):
 		# for now, check to see if ip is in constant field INTERNAL_IPS
@@ -100,16 +110,19 @@ class Data_Aggregator:
 			if ip_pkt.p != dpkt.ip.IP_PROTO_TCP and ip_pkt.p != dpkt.ip.IP_PROTO_UDP:
 				# make sure its UDP or TCP
 				continue
-			app_data = ip_pkt.data
-
+			transp_data = ip_pkt.data
 			src_ip = to_ip_str(ip_pkt.src)
 			dst_ip = to_ip_str(ip_pkt.dst)
 
 			# for now just exclude things that aren't https
-			source_port = app_data.sport 
-			dest_port = app_data.dport
+			source_port = transp_data.sport 
+			dest_port = transp_data.dport
 			if source_port != 443 and dest_port != 443:
 				continue
+
+			seq_n = transp_data.seq
+			ack_n = transp_data.ack
+			win_s = transp_data.win
 
 			if self.is_internal(src_ip):
 				# outgoing packet
@@ -117,36 +130,41 @@ class Data_Aggregator:
 					self.bytes_transfered[0][dst_ip]
 				except KeyError:
 					self.bytes_transfered[0][dst_ip, source_port] = np.zeros(n_bins)
+					self.bytes_transfered[2][dst_ip, source_port] = {i:[] for i in range(n_bins)}
 				bin_of_interest = int(np.floor(((ts - t_start) / self.t_interval)))
 				self.bytes_transfered[0][dst_ip, source_port][bin_of_interest] += ip_pkt.len
 
-				# record flags
-
+				# record tport layer values
+				self.bytes_transfered[2][dst_ip, source_port][bin_of_interest].append([seq_n, ack_n, win_s])
 
 			elif self.is_internal(dst_ip):
 				# incoming packet
 				try:
 					self.bytes_transfered[1][src_ip, dest_port]
 				except KeyError:
-					self.bytes_transfered[1][src_ip, dest_port] =np.zeros(n_bins)
+					self.bytes_transfered[1][src_ip, dest_port] = np.zeros(n_bins)
+					self.bytes_transfered[3][src_ip, dest_port] = {i:[] for i in range(n_bins)}
 				bin_of_interest = int(np.floor(((ts - t_start) / self.t_interval)))
 				self.bytes_transfered[1][src_ip,dest_port][bin_of_interest] += ip_pkt.len
 
-				# record flags
+				# record tport layer values
+				self.bytes_transfered[3][src_ip, dest_port][bin_of_interest].append([seq_n, ack_n, win_s])
 
 			else:
 				print("Neither src: {} nor dst: {} are internal...".format(src_ip, dst_ip))
 
 		# place all IPs into up and down, for convenience
-		all_flows = []
-		for i in range(2):
-			for ip in self.bytes_transfered[i]:
-				for port in self.bytes_transfered[i][ip]:
-					try:
-						self.bytes_transfered[1-i][ip]
-					except KeyError:
-						self.bytes_transfered[1-i][ip] = np.zeros(n_bins)
-		exit(0)
+		all_flows = set([(ip,port) for i in range(len(self.bytes_transfered)) 
+			for ip,port in self.bytes_transfered[i]])
+		for i in range(len(self.bytes_transfered)):
+			for flow in all_flows:
+				try:
+					self.bytes_transfered[i][flow]
+				except KeyError:
+					if i < 2:
+						self.bytes_transfered[i][flow] = np.zeros(n_bins)
+					else:
+						self.bytes_transfered[i][flow] = {j:[] for j in range(n_bins)}
 
 	def per_flow_video_classifier(self, _id):
 		pcap_file_name = os.path.join(self.pcap_dir, "{}_{}.pcap".format(self.type,_id))

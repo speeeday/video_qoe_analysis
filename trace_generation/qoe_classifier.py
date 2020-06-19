@@ -27,43 +27,41 @@ class K_Model:
 		)
 		self.inputs = inputs
 
-		# divide into custom feautures and a byte map
 		temporal_image = inputs[:,0:-1,:,:]
-		custom_features = inputs[:,-1,:,0]
 		
 		# Temporal image -- leverage spatial correlations
 		net1 = temporal_image
 		net1 = tf.keras.layers.Conv2D(
-			16,
-			(3,3),
+			32,
+			(5,3),
 			strides=(1,1),
-			padding='same',
 			activation=tf.keras.activations.relu,
+			padding='same',
 			use_bias=True,
 		)(net1)
 		net1 = tf.keras.layers.Conv2D(
-			16,
-			(3,3),
+			32,
+			(5,3),
 			strides=(1,1),
-			padding='same',
 			activation=tf.keras.activations.relu,
+			padding='same',
 			use_bias=True,
 		)(net1)
 		net1 = tf.keras.layers.MaxPool2D(pool_size=(2,2),strides=(2,2))(net1)
 		net1 = tf.keras.layers.Conv2D(
-			32,
-			(2,2),
+			64,
+			(1,5),
 			strides=(1,1),
-			padding='same',
 			activation=tf.keras.activations.relu,
+			padding='same',
 			use_bias=True,
 		)(net1)
 		net1 = tf.keras.layers.Conv2D(
-			32,
-			(2,2),
+			64,
+			(1,5),
 			strides=(1,1),
-			padding='same',
 			activation=tf.keras.activations.relu,
+			padding='same',
 			use_bias=True,
 		)(net1)
 		net1 = tf.keras.layers.MaxPool2D(pool_size=(2,2),strides=(2,2))(net1)
@@ -71,7 +69,8 @@ class K_Model:
 
 
 		# Hand-crafted features
-		net2 = custom_features
+		custom_features = inputs[:,-1,:,:]
+		net2 = tf.keras.layers.Flatten()(custom_features)
 		net2 = tf.keras.layers.Dense(
 			20,
 			activation=tf.keras.activations.relu,
@@ -82,7 +81,8 @@ class K_Model:
 		)(net2)
 
 		net = tf.keras.layers.Concatenate()([net1,net2])
-		net = tf.keras.layers.Dropout(.2)(net)
+		#net = net1
+		net = tf.keras.layers.Dropout(.25)(net)
 		net = tf.keras.layers.Dense(
 			2*self.output_shape,
 			activation=tf.nn.relu,
@@ -106,7 +106,7 @@ class QOE_Classifier:
 		self.pcap_dir = "./pcaps"
 		self.train_proportion = .8
 		# Shape of the input byte statistics image
-		self.history_length = 25
+		self.history_length = 75
 		self.n_flows = 5
 		self._types = ["twitch", "netflix", "youtube"]
 		#self._types = ["netflix", "twitch"]
@@ -145,7 +145,11 @@ class QOE_Classifier:
 				"960x720": self.visual_quality_labels["medium"],
 				"1280x720": self.visual_quality_labels["high"],
 				"768x432": self.visual_quality_labels["low"],
+				"720x480": self.visual_quality_labels["low"],
 				"720x540": self.visual_quality_labels["low"],
+				"384x288": self.visual_quality_labels["low"],
+				"320x240": self.visual_quality_labels["low"],
+				"512x384": self.visual_quality_labels["low"],
 			},
 		}
 
@@ -189,6 +193,8 @@ class QOE_Classifier:
 				"9": self.state_labels["bad"],  # playing/loading
 				"5": self.state_labels["bad"], # paused/loadng
 				"19": self.state_labels["bad"], # Low buffer / buffering
+				"44": self.state_labels["good"], # paused, but can play
+				"45": self.state_labels["bad"], # paused, low buffer (so maybe not ready to play?)
 				"49": self.state_labels["good"], # Choose a new video
 			}
 		}
@@ -199,7 +205,7 @@ class QOE_Classifier:
 		# Model parameters
 		self.batch_size = 64
 		self.learning_rate = .01
-		self.num_epochs = 25
+		self.num_epochs = 150
 
 		# Data aggregation parameters (see self.temporal_group_session)
 		self.frame_aggregation_type = ['mode', 'average'][0]
@@ -279,9 +285,6 @@ class QOE_Classifier:
 			except:
 				print(quality);exit(0)
 			experienced = [int(el) for el in experienced.split("@")[0].split("x")][1]
-			# optimal = [int(el) for el in optimal.split("@")[0].split("x")][1]
-			# TODO -- how do I handle cases in which the maximum offered quality is low?
-			# this might throw off things and its the exception, so maybe nothing
 			# case by case, since quality is this non-linear thing
 			# <=360 -> low, 360 - 720 -> medium, >= 720-> high
 			if experienced <= 360:
@@ -300,17 +303,36 @@ class QOE_Classifier:
 		try:
 			state_label = self.video_states[_type][state]
 		except KeyError:
+			print(report_of_interest)
 			print("Note -- state {} for type {} not found, returning.".format(state, _type))
 			return None
 
-		# Some types of labels don't make sense, set these to None
+		# Some types of labels don't make sense
 		# If video is paused or buffered, quality is undefined
 		if state_label == self.state_labels['bad']:
+			# TODO -- set this to None or something like that
 			quality_label = self.visual_quality_labels['low']
 
 		self.actual_labels = [quality, buffer_health, state]
 		label = [quality_label, buffer_health_label, state_label]
 		return label
+
+	def get_recent_frames(self, i, arr):
+		# arr is an array of temporal values, self.n_flows x total_length x 2
+		# extract the most recent values, and put them on the right side of the image
+
+		# HAVE TO BE CAREFUL BECAUSE SLICING IS ASSIGNING BY REFERENCE
+		tmp = arr[:,0:i,:]
+
+		if i < self.history_length:
+			# Fill in non-existent past with zeros
+			tmp2 = np.concatenate([
+				np.zeros((self.n_flows, self.history_length - i, 2)),
+				tmp], axis=1)
+		else:
+			tmp2 = tmp[:,-self.history_length:,:]
+
+		return tmp2
 
 	def train_and_evaluate(self, label_type):
 		n_classes = len(self.all_labels[label_type])
@@ -326,7 +348,8 @@ class QOE_Classifier:
 		# Get the training data generator obj
 		train_data = tf.data.Dataset.from_generator(self.get_train_iterator, 
 			output_types=(tf.float32, tf.float32),
-			output_shapes=((self.n_flows + 1,self.history_length,2), (n_classes)))
+			#output_shapes=((self.n_flows + 1,self.history_length,2), (n_classes)))
+			output_shapes=(self.X['train'][0].shape, (n_classes)))
 		train_data = train_data.repeat().batch(self.batch_size)
 		# Get the model object
 		model = K_Model(self.batch_size, self.X['train'][0].shape, n_classes)
@@ -445,6 +468,17 @@ class QOE_Classifier:
 						all_flows.append((i,i))
 
 				active_flows, non_video_total_bytes = {}, {}
+				# Flow acks contains all ack #s (and times) for a given flow (u/d)
+				# dup acks maps time instances to binary arr of length 2xself.n_flows
+				# Indicating if any of the flows in the array experienced a duplicate ACK (loss)
+				# the '2' is for u/d
+				flow_acks = {flow: [{}, {}] for flow in all_flows}
+				dup_acks_by_t = {i: [[], []] for i in range(n_bins)} # list of dup acks by time bin
+				dup_acks = np.zeros((self.n_flows,n_bins,2))
+				# maps time instances to 2xself.n_flows arr containing window sizes for 
+				# the most active flows
+				all_win_sizes = {flow: [{i:[] for i in range(n_bins)},{i:[] for i in range(n_bins)}] for flow in all_flows} 
+				win_sizes = np.zeros((self.n_flows,n_bins,2))
 				for i in range(n_bins):
 					sum_flows = []
 					for flow in all_flows:
@@ -455,6 +489,26 @@ class QOE_Classifier:
 						up_data = np.sum(byte_statistics[0][flow][s:i+1])
 						down_data = np.sum(byte_statistics[1][flow][s:i+1])
 						sum_flows.append(up_data + down_data)
+						if flow[0] == flow[1]: # dummy filler flow:
+							continue
+						for j in range(2): # u/d
+							for transp_data in byte_statistics[2+j][flow][i]:
+								seq_n, ack_n, win_size = transp_data
+								try:
+									flow_acks[flow][j][ack_n].append(i)
+									# duplicate ack
+									#print("Dup ACK!")
+									try:
+										dup_acks_by_t[i][j].append(flow)
+									except KeyError:
+										dup_acks_by_t[i][j] = [flow]
+								except KeyError:
+									flow_acks[flow][j][ack_n] = [i]
+									
+								all_win_sizes[flow][j][i].append(win_size)
+
+
+					# Accumualate non-video bytes (expert feature)
 					non_video_total_bytes[i] = 0
 					for flow in all_non_video_flows:
 						non_video_total_bytes[i] += np.sum(byte_statistics[0][flow][0:i+1])
@@ -476,9 +530,24 @@ class QOE_Classifier:
 					#print("i: {}, SF: {}, best n: {}, {}".format(i, sum_flows, best_n, [sum_flows[j] for j in best_n]))
 					for k in best_n:
 						for j in [0,1]:
+							# all_flows[k] is the flow in question
+							# current_best_n[k] is the index corresponding index in byte stats
+							# Populate byte stats with most active flows
 							byte_stats[current_best_n[k]][i][j] = byte_statistics[j][all_flows[k]][i]
+							# Populate corresponding expert features
+							if len(all_win_sizes[all_flows[k]][j][i]) > 0:
+								win_sizes[current_best_n[k],i,j] = np.max(all_win_sizes[all_flows[k]][j][i])
+							else:
+								if i > 0:
+									# Use the previous value if it's available
+									win_sizes[current_best_n[k],i,j] = win_sizes[current_best_n[k],i-1,j]	
+								else:
+									win_sizes[current_best_n[k],i,j] = 0
+							dup_acks[current_best_n[k],i,j] = (all_flows[k] in dup_acks_by_t[i][j])
+
 				size_byte_stats = byte_stats.shape
 				to_viz, n_to_plot = [], 40
+				total_bytes = np.cumsum(byte_stats,axis=1)
 				for i in range(bin_start, size_byte_stats[1] - self.history_length):
 					# Get flows active up to this point
 					active_flows_now = active_flows[i]
@@ -487,31 +556,39 @@ class QOE_Classifier:
 
 					# Form hand-crafted features
 					# Total non-video bytes up to this point
-					non_video_bytes = [non_video_total_bytes[i] / (10* self.max_dl)]
-					# Total bytes for each (video) flow
-					total_bytes = np.sum(np.sum(byte_stats[:,0:i+1,:], axis=1),axis=1)
-					other_features = total_bytes / self.max_dl
-					other_features = np.concatenate([other_features, non_video_bytes, 
-						pred_service_type], axis=0)
+					non_video_bytes = non_video_total_bytes[i] / (10 * self.max_dl)
+					# Total bytes for each (video) flow (u/d)
+					# total_bytes = np.sum(byte_stats[:,0:i+1,:], axis=1)
+					# total_bytes = total_bytes / self.max_dl
+					# # window size per flow, dup ack 
+					# win_size_ud = win_sizes[i] / 66e3
+					# dup_acks_ud = dup_acks[i]
+
+					# create 3rd and 4th channels
+					total_n_channels = 8
+					other_temporal_features = np.zeros((self.n_flows, self.history_length,total_n_channels-2))
+
+					total_bytes_ud = self.get_recent_frames(i, total_bytes) / ( self.max_dl * 10 ) # want to make it roughly the same scale as the other features 
+					win_size_ud = self.get_recent_frames(i, win_sizes) / 66e3 # 2 bytes
+					dup_acks_ud = self.get_recent_frames(i, dup_acks)
+					other_temporal_features[:,:,0:2] = win_size_ud
+					other_temporal_features[:,:,2:4] = dup_acks_ud
+					other_temporal_features[:,:,4:] = total_bytes_ud
+					
+					expert_features = np.zeros((1,self.history_length,total_n_channels))
+					expert_features[0,0,0] = non_video_bytes
+					expert_features[0,1,0] = pred_service_type
+
 					# End handcrafted features
+
+
 
 					# Form temporal image, showing byte transfers
 					# only reveal up to the current timestep
 
-					# HAVE TO BE CAREFUL BECAUSE SLICING IS ASSIGNING BY REFERENCE
-					tmp = byte_stats[:,0:i,:]
-					
-					if i < self.history_length:
-						# Fill in non-existent past with zeros
-						tmp2 = np.concatenate([
-							np.zeros((self.n_flows, self.history_length - i, 2)),
-							tmp], axis=1)
-					else:
-						tmp2 = tmp[:,-self.history_length:,:]
-						
-
+					temporal_image = self.get_recent_frames(i, byte_stats)
 					# Clip between 0 and 1 (not guaranteed, but likely)
-					temporal_image = tmp2 / self.max_dl
+					temporal_image = temporal_image / self.max_dl
 
 					# label for this time step
 					lab = self.get_qoe_label(example,i - bin_start, _type)
@@ -525,10 +602,9 @@ class QOE_Classifier:
 								to_viz)
 							exit(0)
 
-					# append these features at the bottom of the image, for convenience
-					filler = np.zeros((1,self.history_length,2))
-					filler[0,0:len(other_features),0] = other_features
-					features = np.append(temporal_image, filler, axis=0)
+					# Append all the different types of features into one array
+					features = np.concatenate([temporal_image, other_temporal_features], axis=2)
+					features = np.concatenate([features, expert_features], axis=0)
 					session_features.append(features)
 					session_labels.append(lab)
 					session_metadata.append({
