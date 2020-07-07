@@ -10,8 +10,7 @@ from helpers import *
 def to_ip_str(ip_bytes):
 	return socket.inet_ntoa(ip_bytes)
 
-# general goal is to create train/val datasets for features -> V/NV and features -> QoE of various types
-# QoE is state, quality of stream playing, buffer warning/level
+# takes raw output from a video session (stats logs & pcaps) and packages it up into a more useful, smaller data format
 
 class Data_Aggregator:
 	def __init__(self, _type):
@@ -34,15 +33,19 @@ class Data_Aggregator:
 		self.stats_panel_info = None
 		self.t_start_recording_offset = 0
 
-	def cleanup_files(self):
+	def cleanup_files(self, _id=None):
 		# removes log files, pcaps, as they are no longer useful
 		# hangs here sometimes for some reason.
 		max_n_tries, i = 5, 0
 		done = False
 		while not done:
 			try:
-				call("rm pcaps/{}*".format(self.type), shell=True, timeout=10)
-				call("rm logs/{}*".format(self.type), shell=True, timeout=10)
+				if _id is not None:
+					call("rm pcaps/{}_{}.pcap".format(self.type, _id), shell=True, timeout=10)
+					call("rm logs/{}_stats_log_{}*.".format(self.type, _id), shell=True, timeout=10)
+				else:
+					call("rm pcaps/{}*".format(self.type), shell=True, timeout=10)
+					call("rm logs/{}*".format(self.type), shell=True, timeout=10)
 				done = True
 			except:
 				# timeout expired
@@ -127,7 +130,7 @@ class Data_Aggregator:
 			if self.is_internal(src_ip):
 				# outgoing packet
 				try:
-					self.bytes_transfered[0][dst_ip]
+					self.bytes_transfered[0][dst_ip, source_port]
 				except KeyError:
 					self.bytes_transfered[0][dst_ip, source_port] = np.zeros(n_bins)
 					self.bytes_transfered[2][dst_ip, source_port] = {i:[] for i in range(n_bins)}
@@ -171,7 +174,13 @@ class Data_Aggregator:
 		cmd = "tshark -o ssl.keylog_file:{} -r {} -Y tcp.port==443 -V -T json".format(
 			SSL_KEYLOG_FILE, pcap_file_name)
 		# print(cmd)
-		decrypted_pkt_data = check_output(cmd, shell=True)
+		try:
+			decrypted_pkt_data = check_output(cmd, shell=True)
+		except:
+			# Likely a failed run
+			self.cleanup_files(_id = _id)
+			exit(0)
+
 		def dict_raise_on_duplicates(ordered_pairs):
 			# handles duplicate keys, which of course happens for the field we care about
 			d = {}
@@ -391,6 +400,10 @@ class Data_Aggregator:
 		self.qoe_features[_id]["other_statistics"]["asn_dist"] = asn_dist
 		self.qoe_features[_id]["other_statistics"]["n_total_asns"] = n_asns
 		self.qoe_features[_id]["other_statistics"]["ip_likelihood"] = get_ip_likelihood(all_ips, self.type, modify=False)
+
+		# TODO -- add bitrate information to youtube stats reports (if available)
+
+
 
 		# byte statistics
 		self.qoe_features[_id]["byte_statistics"] = self.bytes_transfered

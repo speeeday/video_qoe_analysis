@@ -6,8 +6,6 @@ else
 	# filters should be added here to remove typical traffic seen on the network
 	# more filters = less post-processing
 
-	# TODO - name all files based on link
-	echo $SSLKEYLOGFILE
 	time_experiment=$(date +"%s")
 	pcap_fname="pcaps/$1_${time_experiment}.pcap"
 	sudo tshark -i ens5 -f "not (port ssh or port ntp)" -w $pcap_fname &

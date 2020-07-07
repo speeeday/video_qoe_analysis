@@ -107,7 +107,8 @@ def get_cdf_xy(data, logx=False, logy=False, n_points = 500, weighted=False):
 
 	return [x, cdf_data]
 
-def get_even_train_split(all_x, all_y, all_metadata, train_proportion, verbose=True, is_dist=False):
+def get_even_train_split(all_x, all_y, all_metadata, train_proportion, 
+	verbose=True, is_dist=False):
 	# forms train and validation sets
 	# y is an array of labels, for various problem types
 	# each problem type is limited by a sub-class (the one with the least examples)
@@ -149,8 +150,9 @@ def get_even_train_split(all_x, all_y, all_metadata, train_proportion, verbose=T
 		else:
 			these_labels_int = these_labels
 		u, c = np.unique(these_labels_int, return_counts = True)
+		print("Problem type: {} U: {} C: {}".format(problem_type, u,c))
 		if len(c) - 1 != np.max(these_labels_int):
-			raise ValueError("You need at least two examples for each sub-class.")
+			raise ValueError("You need at least two examples for each sub-class -- {} -- {}.".format(u,c))
 		limiting_factor = np.min(c)
 		limiting_subclass = np.argmin(c)
 		if verbose:

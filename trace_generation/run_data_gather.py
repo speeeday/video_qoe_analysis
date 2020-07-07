@@ -28,8 +28,8 @@ class Data_Gatherer:
 		self.tc = True # whether or not to run traffic control, encourages more interesting experiments
 		self.run_each = { # whether or not I want to run data collection for each service
 			"netflix": False,
-			"youtube": False,
-			"twitch": True,
+			"youtube": True,
+			"twitch": False,
 			"no_video": False,
 		}
 

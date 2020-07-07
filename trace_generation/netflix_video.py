@@ -157,7 +157,9 @@ class Netflix_Video_Loader:
 				# Note - this reading process can take a while, so sleeping is not necessarily advised
 				t_calls = time.time()
 				info = self.driver.find_element_by_css_selector("div.player-info > textarea").get_attribute("value").split("\n")
-				current_optimal_res = re.search("Playing bitrate \(a\/v\): (.+) \/ (.+) \((.+)\)", info[18]).group(3)
+				res_bitrate = re.search("Playing bitrate \(a\/v\): (.+) \/ (.+) \((.+)\)", info[18])
+				current_optimal_res = res_bitrate.group(3)
+				current_bitrate = res_bitrate.group(2)
 				if video_length is None:
 					video_length = float(info[9].split(":")[1])
 				buffer_health = float(re.search("Buffer size in Seconds \(a\/v\): (.+) \/ (.+)", info[23]).group(1))
@@ -166,6 +168,7 @@ class Netflix_Video_Loader:
 				self.video_statistics[link]["stats"].append({
 					"current_optimal_res": current_optimal_res,
 					"buffer_health": buffer_health,
+					"bitrate": current_bitrate,
 					"state": state,
 					"playback_progress": video_progress,
 					"timestamp": time.time(),

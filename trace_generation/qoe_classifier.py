@@ -14,6 +14,7 @@ from video_classifier import Video_Classifier_v2
 
 
 class K_Model:
+	"""VGG-like classifier. Uses temporal features & non-temporal, expert features."""
 	def __init__(self, batch_size, input_shape, output_shape):
 		self.batch_size = batch_size
 		self.input_shape = input_shape
@@ -81,11 +82,10 @@ class K_Model:
 		)(net2)
 
 		net = tf.keras.layers.Concatenate()([net1,net2])
-		#net = net1
-		net = tf.keras.layers.Dropout(.25)(net)
+		net = tf.keras.layers.Dropout(.15)(net)
 		net = tf.keras.layers.Dense(
 			2*self.output_shape,
-			activation=tf.nn.relu,
+			activation=tf.keras.activations.relu,
 		)(net)
 		net = tf.keras.layers.Dense(
 			self.output_shape,
@@ -104,12 +104,12 @@ class QOE_Classifier:
 		self.fig_dir = "./figures"
 		self.figure_prefix = ""
 		self.pcap_dir = "./pcaps"
-		self.train_proportion = .8
+		self.train_proportion = .9
 		# Shape of the input byte statistics image
-		self.history_length = 75
+		self.history_length = 10
 		self.n_flows = 5
-		self._types = ["twitch", "netflix", "youtube"]
-		#self._types = ["netflix", "twitch"]
+		# self._types = ["twitch", "netflix", "youtube"]
+		self._types = ["twitch"]
 		self.type_to_label_mapping = {_type : i for i,_type in enumerate(self._types)}
 		self.sessions_to_clean = {t:[] for t in self._types}
 		# maximum download size -- we divide by this value; could make this depend on the application
@@ -122,20 +122,24 @@ class QOE_Classifier:
 
 		self.data = {_type: [] for _type in self._types}
 		self.visual_quality_labels = {"high": 2,"medium":1,"low":0}
-		self.buffer_health_labels = {"high": 2,"medium":1,"low":0}
 		
-		self.label_types = ["quality", "buffer", "state"]
-		self.label_to_label_index = {'quality': 0, 'buffer': 1, 'state': 2}
+		n_bitrates = 4 # 6
+		self.bitrate_labels = {str(i):i for i in range(n_bitrates)}
+		
+		self.label_types = ["quality", "buffer", "state", "bitrate"]
+		self.label_to_label_index = {'quality': 0, 'buffer': 1, 'state': 2, "bitrate": 3}
 		self.quality_string_mappings = {
 			"twitch": {
 				"0x0": self.visual_quality_labels["low"],
 				"1600x900": self.visual_quality_labels["high"],
 				"1664x936": self.visual_quality_labels["high"],
+				"1536x864": self.visual_quality_labels["high"],
 				"852x480": self.visual_quality_labels["medium"],
 				"1280x720": self.visual_quality_labels["high"],
 				"1920x1080": self.visual_quality_labels["high"],
 				"1704x960": self.visual_quality_labels["high"],
 				"640x360": self.visual_quality_labels["low"],
+				"640x480": self.visual_quality_labels["low"],
 				"256x144": self.visual_quality_labels["low"],
 				"284x160": self.visual_quality_labels["low"],
 				"1792x1008": self.visual_quality_labels["high"],
@@ -153,21 +157,30 @@ class QOE_Classifier:
 			},
 		}
 
+		n_buffer_classes = 10
+		# Precision at which we'd like to predict buffer health
+		precisions = {"twitch": 2, "youtube": 2, "netflix": 5}
 		self.buffer_intervals = {
+			t: {
+				i: [i*precisions[t], (i+1)*precisions[t]] for i in range(n_buffer_classes)
+			} for t in precisions
+		}
+		for t in self.buffer_intervals:
+			self.buffer_intervals[t][n_buffer_classes-1][1] = np.inf # no limit on the last class
+		self.buffer_health_labels = {i:i for i in range(n_buffer_classes)}
+
+		# maybe in the future there will be a more general way of doing this
+		# but bitrates for a service tend to fall into bins
+		# get the bins via data exploration
+		self.bitrate_intervals = { # kbps
 			"twitch": {
-				"low": [0,5],
-				"medium": [5,15],
-				"high": [15,100000],
-			},
-			"netflix": {
-				"low": [0,5],
-				"medium": [5,15],
-				"high": [15,100000]
-			},
-			"youtube": {
-				"low": [0,5],
-				"medium": [5,15],
-				"high": [15,100000]
+				"0": [0,300],
+				"1": [300,800],
+				"2": [800,1800],
+				"3": [1800,1000000]
+				#"3": [1800,2500],
+				# "4": [2500,6000],
+				# "5": [6000,1000000000]
 			}
 		}
 
@@ -198,18 +211,23 @@ class QOE_Classifier:
 				"49": self.state_labels["good"], # Choose a new video
 			}
 		}
-		self.all_labels = {"quality": self.visual_quality_labels, "buffer": self.buffer_health_labels, "state": self.state_labels}
+		self.all_labels = {
+			"quality": self.visual_quality_labels, 
+			"buffer": self.buffer_health_labels, 
+			"state": self.state_labels,
+			"bitrate": self.bitrate_labels,
+		}
 		self.actual_labels = None
 		self.vc = Video_Classifier_v2()
 
 		# Model parameters
 		self.batch_size = 64
 		self.learning_rate = .01
-		self.num_epochs = 150
+		self.num_epochs = 30
 
 		# Data aggregation parameters (see self.temporal_group_session)
 		self.frame_aggregation_type = ['mode', 'average'][0]
-		self.frame_length = 4 # how many frames over which to aggregate labels
+		self.frame_length = 1 # how many frames over which to aggregate labels
 
 	def cleanup(self):
 		""" Log files, pcaps, etc.. may be accidentally deleted over time. Get rid of these in examples, since we are missing information."""
@@ -252,6 +270,12 @@ class QOE_Classifier:
 				if buffer_health_seconds >= self.buffer_intervals[_type][quality][0] and\
 					buffer_health_seconds < self.buffer_intervals[_type][quality][1]:
 					return self.buffer_health_labels[quality]
+		def bitrate_to_label(bitrate_kbps):
+			for bitrate in self.bitrate_intervals[_type]:
+				if bitrate_kbps >= self.bitrate_intervals[_type][bitrate][0] and\
+					bitrate_kbps < self.bitrate_intervals[_type][bitrate][1]:
+					return self.bitrate_labels[bitrate]
+
 
 		# i = 0 -> first report; each additional index corresponds to T_INTERVAL seconds
 		t_start = float(example["stats_panel"][0]["timestamp"])
@@ -268,9 +292,11 @@ class QOE_Classifier:
 		state = report_of_interest["state"].strip().lower()
 		quality = report_of_interest["current_optimal_res"] # visual quality
 		buffer_health = float(report_of_interest["buffer_health"].replace("s",""))
+		bitrate = float(report_of_interest["bitrate"]) # kbps
 
 		# Convert the raw buffer health to an integer label
 		buffer_health_label = buffer_health_to_label(buffer_health)
+		bitrate_label = bitrate_to_label(bitrate)
 
 		if _type == "twitch":
 			quality_label = self.quality_string_mappings[_type][quality]
@@ -312,9 +338,14 @@ class QOE_Classifier:
 		if state_label == self.state_labels['bad']:
 			# TODO -- set this to None or something like that
 			quality_label = self.visual_quality_labels['low']
+			bitrate_label = self.bitrate_labels['0']
+			buffer_health_label = self.buffer_health_labels[0]
+		if buffer_health_label == self.buffer_health_labels[0]:
+			# likely rebuffering
+			state_label = self.state_labels["bad"]
 
-		self.actual_labels = [quality, buffer_health, state]
-		label = [quality_label, buffer_health_label, state_label]
+		self.actual_labels = [quality, buffer_health, state, bitrate]
+		label = [quality_label, buffer_health_label, state_label, bitrate_label]
 		return label
 
 	def get_recent_frames(self, i, arr):
@@ -372,8 +403,9 @@ class QOE_Classifier:
 		preds = np.argmax(preds, axis=1)
 		self.Y["val"] = [np.argmax(el) for el in self.Y["val"]]
 		cf = tf.math.confusion_matrix(self.Y["val"], preds, n_classes)
-		print(cf)
-		print(cf/np.transpose(np.tile(np.sum(cf,axis=1), (n_classes,1))))	
+		normalized_cf = cf/np.transpose(np.tile(np.sum(cf,axis=1), (n_classes,1)))
+		normalized_acc = 1 -sum(normalized_cf[i,j]/cf.shape[0] for i in range(cf.shape[0]) for j in range(cf.shape[1])if i != j)
+		print("Normalized CF: {}\n Nomalized Acc: {}".format(normalized_cf, normalized_acc))
 
 		# Tabulate specifically, what it is getting wrong
 		quals, types = {}, {}
@@ -557,23 +589,19 @@ class QOE_Classifier:
 					# Form hand-crafted features
 					# Total non-video bytes up to this point
 					non_video_bytes = non_video_total_bytes[i] / (10 * self.max_dl)
-					# Total bytes for each (video) flow (u/d)
-					# total_bytes = np.sum(byte_stats[:,0:i+1,:], axis=1)
-					# total_bytes = total_bytes / self.max_dl
-					# # window size per flow, dup ack 
-					# win_size_ud = win_sizes[i] / 66e3
-					# dup_acks_ud = dup_acks[i]
+					
+					
 
-					# create 3rd and 4th channels
-					total_n_channels = 8
+					total_n_channels = 6
 					other_temporal_features = np.zeros((self.n_flows, self.history_length,total_n_channels-2))
-
+					# Total bytes for each (video) flow (u/d)
 					total_bytes_ud = self.get_recent_frames(i, total_bytes) / ( self.max_dl * 10 ) # want to make it roughly the same scale as the other features 
-					win_size_ud = self.get_recent_frames(i, win_sizes) / 66e3 # 2 bytes
+					# win_size_ud = self.get_recent_frames(i, win_sizes) / 66e3 # 2 bytes
+					# dup ack instaces 
 					dup_acks_ud = self.get_recent_frames(i, dup_acks)
-					other_temporal_features[:,:,0:2] = win_size_ud
-					other_temporal_features[:,:,2:4] = dup_acks_ud
-					other_temporal_features[:,:,4:] = total_bytes_ud
+					# other_temporal_features[:,:,0:2] = win_size_ud
+					other_temporal_features[:,:,0:2] = dup_acks_ud
+					other_temporal_features[:,:,2:] = total_bytes_ud
 					
 					expert_features = np.zeros((1,self.history_length,total_n_channels))
 					expert_features[0,0,0] = non_video_bytes

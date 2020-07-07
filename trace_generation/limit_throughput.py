@@ -5,18 +5,19 @@ from subprocess import call, check_output
 def limit_throughput(file,_type):
 	wait_time = { # how long to wait before restricting bandwidth (allows website to load w.o error)
 		"youtube": 8,
-		"twitch": 8,
+		"twitch": 17,
 		"netflix": 15,
 	}[_type]
+	# Load past throughput limitations
 	traces_dir = TRACES_DIR
 	if file is None:
 		# choose a random file to use
 		trace_file = np.random.choice(os.listdir(traces_dir))
-	#print("Loading trace: {}".format(trace_file))
 	with open(os.path.join(traces_dir,trace_file), 'r') as f:
 		csvr = csv.reader(f)
 		bandwidth_trace = [[float(el[0]), float(el[1])] for el in csvr]
 	bandwidth_trace = np.array(bandwidth_trace)
+
 	total_time = bandwidth_trace[-1,0]
 	t_start = time.time()
 	last_bw_restriction = None
@@ -35,6 +36,8 @@ def limit_throughput(file,_type):
 			#call("tcset ens5 --rate {}Kbps --direction outgoing".format(bw_restriction), shell=True)
 			#print(check_output("tcshow ens5", shell=True))
 			last_bw_restriction=bw_restriction
+			with open(os.path.join(METADATA_DIR, "all_throughput_limitations.csv"), 'a') as f:
+				f.write("{},{}\n".format(time.time(),bw_restriction))
 		time.sleep(.3)
 
 def main():
