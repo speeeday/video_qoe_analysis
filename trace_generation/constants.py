@@ -16,5 +16,6 @@ INTERNAL_IPS = ["172.31.30.176"]
 ASN_LIST = ["GOOGLE", "NETFLIX-ASN", "AMAZON-AES", "AKAMAI-AS", "FACEBOOK", "JUSTINTV", "OTHER"]
 ASN_LIST = {k:i for i, k in enumerate(ASN_LIST)}
 MAX_TIME = 300 # max time for a stream to be active
+MAX_TIME = 600
 NETFLIX_PROFILE_INDEX = 3 # number in the list of netflix profiles on the accouont you should use (zero indexed)
 T_INTERVAL = 1 # interval over which to bin statistics

@@ -20,23 +20,22 @@ from mininet.topo import Topo
 from mininet.node import Controller, OVSSwitch
 from mininet.log import setLogLevel, info
 from mininet.cli import CLI
-from mininet.link import Intf
-
+from mininet.link import Intf, TCIntf
+from mininet.link import TCLink
 
 import argparse
 import os
-from time import sleep
+from time import sleep, time
+from subprocess import call
+import math
 
 parser = argparse.ArgumentParser(description='Mininet demo')
 
 parser.add_argument('--num-hosts', help='Number of hosts to connect to switch',
-                    type=int, action="store", default=2)
+                    type=int, action="store", default=1)
 
-parser.add_argument('--pcap-name', help='Name of PCAP file to save',
-                    type=str, action="store", default='pcaps/s2-eth2.pcapng')
-
-parser.add_argument('--link', help='Name of video link to use',
-                    type=str, action="store", default='https://www.youtube.com/watch?v=NKaA0IPcD_Q')
+parser.add_argument('--id', help='Name of PCAP file to save',
+                    type=str, action="store", default='temp')
 
 args = parser.parse_args()
 
@@ -50,18 +49,41 @@ class SingleSwitchTopo(Topo):
 
         switch = self.addSwitch('s1')
         switch2 = self.addSwitch('s2')
+        switch3 = self.addSwitch('s3')
+        switch4 = self.addSwitch('s4')
+
+        self.addLink(switch2,switch, cls=TCLink, bw=10) # BOTTLENECK LINK (all clients are limited by this link)
+
+        self.addLink(switch2,switch3, cls=TCLink)#, bw=6) # BOTTLENECK LINK (all clients are limited by this link)
+        self.addLink(switch2,switch4, cls=TCLink)#, bw=6) # BOTTLENECK LINK (all clients are limited by this link)
+
         
-        for h in range(n):
+        for h in xrange(int(math.ceil(n/2))):
             host = self.addHost('h%d' % (h + 1))
-            self.addLink(host, switch2)
+            self.addLink(host, switch3)
             self.host_objects.append(host)
+
+        for h in xrange(n-int(math.ceil(n/2))):
+            host = self.addHost('h%d' % (h + int(math.ceil(n/2)) + 1))
+            self.addLink(host, switch4)
+            self.host_objects.append(host)
+
             
-        self.addLink(switch2,switch) # BOTTLENECK LINK (all clients are limited by this link)
+        # BW is in Mbits
+#        self.addLink(switch2,switch, cls=TCLink, bw=12) # BOTTLENECK LINK (all clients are limited by this link)
 
             
 def main():
 
-    outfile = args.pcap_name
+    logfile_dir = 'results/' + args.id
+    
+    if not os.path.exists(logfile_dir):
+        call("mkdir -p {}".format(logfile_dir), shell=True)
+    else:
+        print("ID: '{}' already exists.")
+        os.sys.exit()
+    
+    outfile = logfile_dir + "/" + args.id
     
     num_hosts = args.num_hosts
 
@@ -79,19 +101,22 @@ def main():
 
 
 #    raw_input()
-    os.system('sudo dumpcap -i s1-eth1 -w {} &'.format(outfile))
+    os.system('sudo touch {}'.format(outfile+".pcapng"))
+#    os.system('sudo touch {}'.format(outfile+"-downlink.pcapng"))
+    
+    os.system('sudo dumpcap -i s1-eth1 -w {} &'.format(outfile+".pcapng"))
+#    os.system('sudo dumpcap -i s2-eth1 -w {} &'.format(outfile+"-downlink.pcapng"))
     sleep(3)
+
+    os.system('sudo chown sj:sj /home/sj/research/video_qoe_analysis/trace_generation/results/{}/'.format(args.id))
+    sleep(1)
     
     ### EXPERIMENT CODE START ###
 
     # this is where you can modify how you want the clients to access the videos, for example if you want to induce a delay between when 1 client starts the stream versus the other, OR if you want to change the streaming services between different clients that can all be modified here
     
-    client = net.get(topo.host_objects[0])
-    print(client.cmd("dig google.com"))
 
-    video_url = args.link
 
-    ssl_key_dir = '/home/sj/research/video_qoe_analysis/trace_generation/ssl_keys/'
     
 #    client.cmd('export SSLKEYLOGFILE=' + ssl_key_dir + args.pcap_name.split('/')[1].split('.')[0] + '-ssl_key.log')
 
@@ -110,11 +135,38 @@ def main():
 
 
    # open a window on h1 to run experiment manually (until sslkeylogfile can be automated)
-    client.cmd('xterm')
-   
+#    client.cmd('xterm &')
+#    client.cmd('xterm &')
+#    client2.cmd('xterm &')
+
+    for i in range(num_hosts):
+        curr_client = net.get(topo.host_objects[i])
+        curr_client.cmd('bash /home/sj/research/video_qoe_analysis/trace_generation/run_netflix_client_with_stats.sh {} {} &'.format(args.id, i+1), shell=True)
+
+#    client1 = net.get(topo.host_objects[0])
+#    client2 = net.get(topo.host_objects[1])
+#    client3 = net.get(topo.host_objects[2])
+#    client4 = net.get(topo.host_objects[3])
+
+#    video_url = args.link
+
+#    ssl_key_dir = '/home/sj/research/video_qoe_analysis/trace_generation/results/' + args.id + '/'
+
+
+#    client1.cmd('bash /home/sj/research/video_qoe_analysis/trace_generation/run_netflix.sh {} {} &'.format(args.id, 1), shell=True)
+#    client2.cmd('bash /home/sj/research/video_qoe_analysis/trace_generation/run_netflix.sh {} {} &'.format(args.id, 2), shell=True)
+#    client3.cmd('bash /home/sj/research/video_qoe_analysis/trace_generation/run_netflix.sh {} {} &'.format(args.id, 3), shell=True)
+#    client4.cmd('bash /home/sj/research/video_qoe_analysis/trace_generation/run_netflix.sh {} {} &'.format(args.id, 4), shell=True)
+
+   # rename the ssl key log
+#    client.cmd('mv /home/sj/research/video_qoe_analysis/trace_\
+#generation/ssl_keys/curr-ssl_key.log ' + ssl_key_dir + args.id + '-ssl_key.log')
+#    client2.cmd('mv /home/sj/research/video_qoe_analysis/trace_\
+#generation/ssl_keys/curr-ssl_key.log ' + ssl_key_dir + args.id + '-ssl_key.log')
+    
     ### EXPERIMENT CODE END   ###
     
-    print("Done !")
+    print "Done !"
     # Hang on the CLI before we exit manually
 
     CLI( net )
