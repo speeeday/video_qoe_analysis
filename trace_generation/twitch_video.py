@@ -250,8 +250,8 @@ class Twitch_Video_Loader:
 			for i in range(3,7): # this index might change randomly -- not entirely sure
 				try:
 					vsb = self.driver.find_element_by_css_selector("div.settings-menu-button-component.settings-menu-button-component--forced-dark-theme.tw-root--hover.tw-root--theme-dark >\
-						div > div > div > div > div > div:nth-child({}) > div > div > input".format(i))
-					l = vsb.get_attribute("label") 
+						div > div > div > div > div > div:nth-child({}) > div > div > label > p".format(i))
+					l = vsb.get_attribute("textContent") 
 					if l == "Video Stats":
 						vsb_i = i
 						break
@@ -271,7 +271,7 @@ class Twitch_Video_Loader:
 				self.driver.find_element_by_css_selector('.player-controls__right-control-group > div > div button').click()
 				# click the advanced tab
 				self.driver.find_element_by_css_selector("div.settings-menu-button-component.settings-menu-button-component--forced-dark-theme.tw-root--hover.tw-root--theme-dark >\
-					div > div > div > div > div > div:nth-child(2) > button > div").click()
+					div > div > div > div > div > div:nth-child({}) > button > div".format(adv_i)).click()
 				self.driver.find_element_by_css_selector("div.settings-menu-button-component.settings-menu-button-component--forced-dark-theme.tw-root--hover.tw-root--theme-dark >\
 						div > div > div > div > div > div:nth-child({}) > div > div > label".format(vsb_i)).click()
 			tick=time.time()
