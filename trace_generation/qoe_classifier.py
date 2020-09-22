@@ -1,6 +1,6 @@
 ## uses temporal data to try and capture qoe metrics
 # Qoe metrics are quality, state, buffer level (high vs low)
-import glob, pickle, numpy as np, os, re, time, itertools
+import glob, pickle, numpy as np, os, re, time, itertools, traceback
 
 from scipy import stats
 
@@ -12,6 +12,188 @@ from constants import *
 from helpers import *
 from video_classifier import Video_Classifier_v2
 
+
+def normalized_acc_metric(y_true, y_pred):
+	cf = tf.math.confusion_matrix(tf.math.argmax(y_true,axis=1), tf.math.argmax(y_pred,axis=1))
+	c = tf.math.reduce_sum(cf,axis=1)
+	expanded_c = tf.tile(c, tf.expand_dims(tf.size(c),axis=0))
+	expanded_c = tf.transpose(tf.reshape(expanded_c, (tf.size(c),tf.size(c))))
+	normalized_cf = tf.divide(cf, expanded_c)
+	normalized_cf = tf.where(tf.math.is_nan(normalized_cf), tf.zeros_like(normalized_cf), normalized_cf)
+	normalized_acc = tf.linalg.trace(normalized_cf) / tf.cast(tf.size(c),tf.float64)
+	return normalized_acc
+
+# y_true = tf.random.normal((10, 10)) + 30
+# y_pred = tf.random.normal((10,10)) + 30
+# print(normalized_acc_metric(y_true,y_pred))
+# exit(0)
+
+
+
+class K2_Model:
+	"""VGG-like classifier. Uses temporal features & non-temporal, expert features."""
+	def __init__(self, batch_size, input_shape, output_shape):
+		self.batch_size = batch_size
+		self.input_shape = input_shape
+		self.output_shape = output_shape
+
+	def build(self):
+		# Define the model here
+		inputs = tf.keras.layers.Input(
+			shape=self.input_shape, 
+			batch_size=self.batch_size
+		)
+		self.inputs = inputs
+
+		temporal_image = inputs[:,0:-1,:,:]
+		byte_stats = temporal_image[:,:,:,0:2]
+		dup_acks = temporal_image[:,:,:,2:4]
+		cumulative_byte_stats = temporal_image[:,:,:,4:6]
+		get_requests = temporal_image[:,:,:,6]
+		
+		# Temporal image -- leverage spatial correlations
+		net1 = byte_stats
+		net1 = tf.keras.layers.Conv2D(
+			8,
+			(N_FLOWS,3),
+			strides=(1,1),
+			activation=tf.keras.activations.relu,
+			use_bias=True,
+		)(net1)
+		net1 = tf.keras.layers.Conv2D(
+			8,
+			(1,3),
+			strides=(1,1),
+			activation=tf.keras.activations.relu,
+			use_bias=True,
+		)(net1)
+		net1 = tf.keras.layers.MaxPool2D(pool_size=(1,2),strides=(1,2))(net1)
+		net1 = tf.keras.layers.Conv2D(
+			16,
+			(1,3),
+			strides=(1,1),
+			activation=tf.keras.activations.relu,
+			use_bias=True,
+		)(net1)
+		net1 = tf.keras.layers.Conv2D(
+			16,
+			(1,3),
+			strides=(1,1),
+			activation=tf.keras.activations.relu,
+			use_bias=True,
+		)(net1)
+		net1 = tf.keras.layers.MaxPool2D(pool_size=(1,2),strides=(1,2))(net1)
+		net1 = tf.keras.layers.Flatten()(net1)
+
+
+		# Temporal image -- leverage spatial correlations
+		net2 = dup_acks
+		net2 = tf.keras.layers.Conv2D(
+			8,
+			(N_FLOWS,3),
+			strides=(1,1),
+			activation=tf.keras.activations.relu,
+			use_bias=True,
+		)(net2)
+		net2 = tf.keras.layers.Conv2D(
+			8,
+			(1,3),
+			strides=(1,1),
+			activation=tf.keras.activations.relu,
+			use_bias=True,
+		)(net2)
+		net2 = tf.keras.layers.MaxPool2D(pool_size=(1,2),strides=(1,2))(net2)
+		net2 = tf.keras.layers.Conv2D(
+			16,
+			(1,3),
+			strides=(1,1),
+			activation=tf.keras.activations.relu,
+			use_bias=True,
+		)(net2)
+		net2 = tf.keras.layers.Conv2D(
+			16,
+			(1,3),
+			strides=(1,1),
+			activation=tf.keras.activations.relu,
+			use_bias=True,
+		)(net2)
+		net2 = tf.keras.layers.MaxPool2D(pool_size=(1,2),strides=(1,2))(net2)
+		net2 = tf.keras.layers.Flatten()(net2)
+
+
+		# Temporal image -- leverage spatial correlations
+		net3 = cumulative_byte_stats
+		net3 = tf.keras.layers.Conv2D(
+			8,
+			(N_FLOWS,3),
+			strides=(1,1),
+			activation=tf.keras.activations.relu,
+			use_bias=True,
+		)(net3)
+		net3 = tf.keras.layers.Conv2D(
+			8,
+			(1,3),
+			strides=(1,1),
+			activation=tf.keras.activations.relu,
+			use_bias=True,
+		)(net3)
+		net3 = tf.keras.layers.MaxPool2D(pool_size=(1,2),strides=(1,2))(net3)
+		net3 = tf.keras.layers.Conv2D(
+			16,
+			(1,3),
+			strides=(1,1),
+			activation=tf.keras.activations.relu,
+			use_bias=True,
+		)(net3)
+		net3 = tf.keras.layers.Conv2D(
+			16,
+			(1,3),
+			strides=(1,1),
+			activation=tf.keras.activations.relu,
+			use_bias=True,
+		)(net3)
+		net3 = tf.keras.layers.MaxPool2D(pool_size=(1,2),strides=(1,2))(net3)
+		net3 = tf.keras.layers.Flatten()(net3)
+
+
+		net4 = tf.keras.layers.Flatten()(get_requests)
+		net4 = tf.keras.layers.Dense(
+			20,
+			activation=tf.keras.activations.relu,
+			use_bias=True,
+		)(net4)
+		net4 = tf.keras.layers.Dense(
+			10
+		)(net4)
+
+		# Hand-crafted features
+		custom_features = inputs[:,-1,:,:]
+		net5 = tf.keras.layers.Flatten()(custom_features)
+		net5 = tf.keras.layers.Dense(
+			20,
+			activation=tf.keras.activations.relu,
+			use_bias=True,
+		)(net5)
+		net5 = tf.keras.layers.Dense(
+			10
+		)(net5)
+
+		net = tf.keras.layers.Concatenate()([net1,net2,net3,net4,net5])
+		net = tf.keras.layers.Dense(
+			4*self.output_shape,
+			activation=tf.keras.activations.relu,
+		)(net)
+		net = tf.keras.layers.Dropout(.15)(net)
+		net = tf.keras.layers.Dense(
+			2*self.output_shape,
+			activation=tf.keras.activations.relu,
+		)(net)
+		net = tf.keras.layers.Dense(
+			self.output_shape,
+			activation=tf.keras.activations.softmax,
+		)(net)
+
+		self.outputs = net
 
 class K_Model:
 	"""VGG-like classifier. Uses temporal features & non-temporal, expert features."""
@@ -34,38 +216,36 @@ class K_Model:
 		net1 = temporal_image
 		net1 = tf.keras.layers.Conv2D(
 			32,
-			(5,3),
+			(N_FLOWS,3),
 			strides=(1,1),
 			activation=tf.keras.activations.relu,
-			padding='same',
 			use_bias=True,
 		)(net1)
 		net1 = tf.keras.layers.Conv2D(
 			32,
-			(5,3),
+			(1,3),
 			strides=(1,1),
 			activation=tf.keras.activations.relu,
-			padding='same',
 			use_bias=True,
 		)(net1)
-		net1 = tf.keras.layers.MaxPool2D(pool_size=(2,2),strides=(2,2))(net1)
+		net1 = tf.keras.layers.MaxPool2D(pool_size=(1,2),strides=(1,2))(net1)
 		net1 = tf.keras.layers.Conv2D(
 			64,
-			(1,5),
+			(1,3),
 			strides=(1,1),
 			activation=tf.keras.activations.relu,
-			padding='same',
 			use_bias=True,
 		)(net1)
 		net1 = tf.keras.layers.Conv2D(
 			64,
-			(1,5),
+			(1,3),
 			strides=(1,1),
 			activation=tf.keras.activations.relu,
-			padding='same',
 			use_bias=True,
 		)(net1)
-		net1 = tf.keras.layers.MaxPool2D(pool_size=(2,2),strides=(2,2))(net1)
+		net1 = tf.keras.layers.MaxPool2D(pool_size=(1,2),strides=(1,2))(net1)
+		
+
 		net1 = tf.keras.layers.Flatten()(net1)
 
 
@@ -82,7 +262,7 @@ class K_Model:
 		)(net2)
 
 		net = tf.keras.layers.Concatenate()([net1,net2])
-		net = tf.keras.layers.Dropout(.15)(net)
+		net = tf.keras.layers.Dropout(.5)(net)
 		net = tf.keras.layers.Dense(
 			2*self.output_shape,
 			activation=tf.keras.activations.relu,
@@ -97,7 +277,7 @@ class K_Model:
 
 
 class QOE_Classifier:
-	def __init__(self, skip_load=False):
+	def __init__(self, skip_load=False, recover_model=False):
 		self.skip_load=skip_load
 		self.features_dir = "./features"
 		self.metadata_dir = METADATA_DIR
@@ -105,32 +285,41 @@ class QOE_Classifier:
 		self.figure_prefix = ""
 		self.pcap_dir = "./pcaps"
 		self.train_proportion = .9
+		self.append_tv = True
 		# Shape of the input byte statistics image
-		self.history_length = 10
-		self.n_flows = 5
+		self.history_length = HISTORY_LENGTH
+		self.n_flows = N_FLOWS
 		# self._types = ["twitch", "netflix", "youtube"]
 		self._types = ["twitch"]
 		self.type_to_label_mapping = {_type : i for i,_type in enumerate(self._types)}
 		self.sessions_to_clean = {t:[] for t in self._types}
 		# maximum download size -- we divide by this value; could make this depend on the application
-		self.max_dl = float(.5e6)
+		self.max_dl = BYTE_TRANSFER_NORM
+		self.ack_norm = DUP_ACK_NORM # normalize number of duplicate acks per T_INTERVAL by this value
 
 
 		self.X = {"train": {}, "val": {}, "all": []}
 		self.Y = {"train": {}, "val": {}, "all": []}
+		self.Y_reg = {"train": {}, "val": {}, "all": []}
 		self.metadata = {"train": [], "val": [], "all": []} # contains info about each example, in case we want to sort on these values
 
 		self.data = {_type: [] for _type in self._types}
 		self.visual_quality_labels = {"high": 2,"medium":1,"low":0}
 		
-		n_bitrates = 4 # 6
+		n_bitrates = 4 #
 		self.bitrate_labels = {str(i):i for i in range(n_bitrates)}
 		
-		self.label_types = ["quality", "buffer", "state", "bitrate"]
-		self.label_to_label_index = {'quality': 0, 'buffer': 1, 'state': 2, "bitrate": 3}
+		self.label_types = ["quality", "buffer", "state", "bitrate", "buffer_delta"]
+		self.models = {lt: None for lt in self.label_types}
+		self.label_to_label_index = {
+			'quality': 0, 
+			'buffer': 1, 
+			'state': 2, 
+			"bitrate": 3, 
+			"buffer_delta": 4, 
+		}
 		self.quality_string_mappings = {
 			"twitch": {
-				"0x0": self.visual_quality_labels["low"],
 				"1600x900": self.visual_quality_labels["high"],
 				"1664x936": self.visual_quality_labels["high"],
 				"1536x864": self.visual_quality_labels["high"],
@@ -157,9 +346,9 @@ class QOE_Classifier:
 			},
 		}
 
-		n_buffer_classes = 10
+		n_buffer_classes = 6
 		# Precision at which we'd like to predict buffer health
-		precisions = {"twitch": 2, "youtube": 2, "netflix": 5}
+		precisions = {"twitch": 4, "youtube": 2, "netflix": 5}
 		self.buffer_intervals = {
 			t: {
 				i: [i*precisions[t], (i+1)*precisions[t]] for i in range(n_buffer_classes)
@@ -168,6 +357,19 @@ class QOE_Classifier:
 		for t in self.buffer_intervals:
 			self.buffer_intervals[t][n_buffer_classes-1][1] = np.inf # no limit on the last class
 		self.buffer_health_labels = {i:i for i in range(n_buffer_classes)}
+
+		# Buffer delta intervals / classes
+		lowest_vals = { k: -1*n_buffer_classes*precisions[k] / 2 for k in precisions }
+		self.buffer_delta_intervals = {
+			t: {
+				i: [i*precisions[t] + lowest_vals[t], (i+1) * precisions[t] + lowest_vals[t]] for i in range(n_buffer_classes)
+			} for t in precisions
+		}
+		for t in self.buffer_delta_intervals:
+			self.buffer_delta_intervals[t][0][0] = -np.inf
+			self.buffer_delta_intervals[t][n_buffer_classes-1][1] = np.inf
+		self.buffer_delta_labels = {i:i for i in range(n_buffer_classes)}
+		self.precisions = precisions
 
 		# maybe in the future there will be a more general way of doing this
 		# but bitrates for a service tend to fall into bins
@@ -216,14 +418,18 @@ class QOE_Classifier:
 			"buffer": self.buffer_health_labels, 
 			"state": self.state_labels,
 			"bitrate": self.bitrate_labels,
+			"buffer_delta": self.buffer_delta_labels,
 		}
 		self.actual_labels = None
 		self.vc = Video_Classifier_v2()
 
 		# Model parameters
-		self.batch_size = 64
-		self.learning_rate = .01
-		self.num_epochs = 30
+		self.batch_size = 128
+		self.learning_rate = .001
+		self.num_epochs = 20
+		self.recover_model = recover_model # whether or not to recover when training
+		self.total_n_channels = TOTAL_N_CHANNELS
+		self.x_inp_shape = (self.n_flows + 1, self.history_length, self.total_n_channels)
 
 		# Data aggregation parameters (see self.temporal_group_session)
 		self.frame_aggregation_type = ['mode', 'average'][0]
@@ -270,6 +476,11 @@ class QOE_Classifier:
 				if buffer_health_seconds >= self.buffer_intervals[_type][quality][0] and\
 					buffer_health_seconds < self.buffer_intervals[_type][quality][1]:
 					return self.buffer_health_labels[quality]
+		def buffer_delta_to_label(buffer_delta_seconds):
+			for delta in self.buffer_intervals[_type]:
+				if buffer_delta_seconds >= self.buffer_delta_intervals[_type][delta][0] and\
+					buffer_delta_seconds < self.buffer_delta_intervals[_type][delta][1]:
+						return self.buffer_delta_labels[delta]
 		def bitrate_to_label(bitrate_kbps):
 			for bitrate in self.bitrate_intervals[_type]:
 				if bitrate_kbps >= self.bitrate_intervals[_type][bitrate][0] and\
@@ -287,18 +498,45 @@ class QOE_Classifier:
 				break
 		if not found:
 			return None
-
 		report_of_interest = example["stats_panel"][j]
+		# no report that corresponds to this time slot
+		if np.abs(float(report_of_interest["timestamp"]) - t_start - i * T_INTERVAL) > self.precisions[_type] / 2: 
+			return None 
+
+		# Finds the report at the beginning of the sequence (so we can identify changes)
+		i_at_beginning = np.maximum(i - T_INTERVAL * self.history_length, 0) # max with 0, in case we are less than history_length in 
+		found=False
+		# Finds the first report that occurs after the interval of interest
+		for j, report in enumerate(example["stats_panel"]):
+			if i_at_beginning * T_INTERVAL <= (float(report["timestamp"]) - t_start):
+				found=True
+				break
+		if not found:
+			return None
+		report_at_beginning = example["stats_panel"][j]
+		# no report that corresponds to this time slot
+		if np.abs(float(report_at_beginning["timestamp"]) - t_start - i_at_beginning * T_INTERVAL) > self.precisions[_type] / 2: 
+			return None 
+		
+
 		state = report_of_interest["state"].strip().lower()
 		quality = report_of_interest["current_optimal_res"] # visual quality
 		buffer_health = float(report_of_interest["buffer_health"].replace("s",""))
+		buffer_health_beginning = float(report_at_beginning["buffer_health"].replace("s",""))
 		bitrate = float(report_of_interest["bitrate"]) # kbps
 
 		# Convert the raw buffer health to an integer label
 		buffer_health_label = buffer_health_to_label(buffer_health)
+		buffer_delta_label = buffer_delta_to_label(buffer_health - buffer_health_beginning)
 		bitrate_label = bitrate_to_label(bitrate)
 
+		# if np.random.random() > .9:
+		# 	print("Report: {}, report beginning: {}, bh: {}, bhd: {}".format(report_of_interest, report_at_beginning, buffer_health_label, buffer_delta_label))
+		# 	if np.random.random() > .99:
+		# 		exit(0)
 		if _type == "twitch":
+			if quality == "0x0":
+				return None
 			quality_label = self.quality_string_mappings[_type][quality]
 		elif _type == "netflix":
 			quality_label = self.quality_string_mappings[_type][quality]
@@ -345,8 +583,21 @@ class QOE_Classifier:
 			state_label = self.state_labels["bad"]
 
 		self.actual_labels = [quality, buffer_health, state, bitrate]
-		label = [quality_label, buffer_health_label, state_label, bitrate_label]
-		return label
+		class_label = [quality_label, buffer_health_label, state_label,\
+		 	bitrate_label, buffer_delta_label]
+		reg_label = [buffer_health]
+		
+		return class_label, reg_label
+
+	def get_model_name(self, label_type):
+		# construct a name for a model, depending on various hyper-parameters
+		if label_type == "buffer":
+			params_to_name_from = [self.history_length, self.n_flows, self.frame_length]
+		elif label_type == "buffer_delta":
+			params_to_name_from = [self.history_length, self.n_flows, self.frame_length]
+		else:
+			raise ValueError("Getting model name for problem type {} not yet implemented.".format(label_type))
+		return "-".join([str(el) for el in params_to_name_from])
 
 	def get_recent_frames(self, i, arr):
 		# arr is an array of temporal values, self.n_flows x total_length x 2
@@ -383,19 +634,40 @@ class QOE_Classifier:
 			output_shapes=(self.X['train'][0].shape, (n_classes)))
 		train_data = train_data.repeat().batch(self.batch_size)
 		# Get the model object
-		model = K_Model(self.batch_size, self.X['train'][0].shape, n_classes)
+		model = K2_Model(self.batch_size, self.x_inp_shape, n_classes)
 		model.build()
-		# Set up training and validation
 		keras_model = tf.keras.models.Model(inputs=model.inputs, outputs=model.outputs)
+		# Recovering and saving models
+		model_name = self.get_model_name(label_type)
+		chkpt_path = os.path.join(MODEL_DIR, label_type, model_name)
+		if self.recover_model:
+			if not os.path.exists(chkpt_path):
+				raise ValueError('Model does not have any checkpoints saved to initialize from.  Set recover_model to False.')
+			else:
+				print("Loading model from {}".format(chkpt_path))
+			keras_model.load_weights(os.path.join(chkpt_path, model_name))
+		else:
+			clear_path(chkpt_path)
+			make_path(chkpt_path)
+		
+		# for saving models at each epoch
+		cp_callback = tf.keras.callbacks.ModelCheckpoint(
+			filepath=os.path.join(chkpt_path, model_name),
+			save_weights_only=True,
+			verbose=1
+		)
+
+		# Set up training and validation
 		keras_model.compile(
 			optimizer=tf.keras.optimizers.Adam(
-				learning_rate=.001
+				learning_rate=self.learning_rate
 			), 
 			loss='categorical_crossentropy', 
-			metrics=['accuracy', tf.keras.metrics.Precision(), tf.keras.metrics.Recall()])
+			metrics=['accuracy', normalized_acc_metric])
 		keras_model.fit(train_data,
 			batch_size=self.batch_size,
 			validation_data=(self.X["val"], cat_y_val), 
+			callbacks=[cp_callback],
 			steps_per_epoch=n_feed_ins['train'],
 			epochs=self.num_epochs,
 			verbose=2)
@@ -406,6 +678,13 @@ class QOE_Classifier:
 		normalized_cf = cf/np.transpose(np.tile(np.sum(cf,axis=1), (n_classes,1)))
 		normalized_acc = 1 -sum(normalized_cf[i,j]/cf.shape[0] for i in range(cf.shape[0]) for j in range(cf.shape[1])if i != j)
 		print("Normalized CF: {}\n Nomalized Acc: {}".format(normalized_cf, normalized_acc))
+		
+		n_off = np.zeros((len(normalized_cf),))
+		for i in range(len(normalized_cf)):
+			for j in range(len(normalized_cf)):
+				n_off[np.abs(i-j)] += normalized_cf[i,j] / len(normalized_cf)
+		for i in range(len(n_off) - 1):
+			print("Acc counting {} off: {} ".format(i, sum(n_off[0:i+1])))
 
 		# Tabulate specifically, what it is getting wrong
 		quals, types = {}, {}
@@ -446,6 +725,23 @@ class QOE_Classifier:
 			if len(incorrects) == n_to_plot:
 				self.visualize_example(np.random.random(), incorrects)
 				incorrects = []
+
+	def load_model(self, label_type):
+		"""Loads a pre-trained model."""
+		model_name = self.get_model_name(label_type)
+		n_classes = len(self.all_labels[label_type])
+		model = K2_Model(self.batch_size, self.x_inp_shape, n_classes)
+		model.build()
+		keras_model = tf.keras.models.Model(inputs=model.inputs, outputs=model.outputs)
+		# Recovering and saving models
+		model_name = self.get_model_name(label_type)
+		chkpt_path = os.path.join(MODEL_DIR, label_type, model_name)
+		try:
+			keras_model.load_weights(os.path.join(chkpt_path, model_name))
+		except:
+			print(traceback.print_exc())
+			raise ValueError("No model exists in {}".format(chkpt_path))
+		self.models[label_type] = keras_model
 
 	def make_train_val(self):
 		# Creates self.X (train, val) and self.Y (train, val)
@@ -507,10 +803,6 @@ class QOE_Classifier:
 				flow_acks = {flow: [{}, {}] for flow in all_flows}
 				dup_acks_by_t = {i: [[], []] for i in range(n_bins)} # list of dup acks by time bin
 				dup_acks = np.zeros((self.n_flows,n_bins,2))
-				# maps time instances to 2xself.n_flows arr containing window sizes for 
-				# the most active flows
-				all_win_sizes = {flow: [{i:[] for i in range(n_bins)},{i:[] for i in range(n_bins)}] for flow in all_flows} 
-				win_sizes = np.zeros((self.n_flows,n_bins,2))
 				for i in range(n_bins):
 					sum_flows = []
 					for flow in all_flows:
@@ -525,7 +817,10 @@ class QOE_Classifier:
 							continue
 						for j in range(2): # u/d
 							for transp_data in byte_statistics[2+j][flow][i]:
-								seq_n, ack_n, win_size = transp_data
+								try:
+									seq_n, ack_n = transp_data
+								except ValueError:
+									seq_n, ack_n, _ = transp_data
 								try:
 									flow_acks[flow][j][ack_n].append(i)
 									# duplicate ack
@@ -536,8 +831,6 @@ class QOE_Classifier:
 										dup_acks_by_t[i][j] = [flow]
 								except KeyError:
 									flow_acks[flow][j][ack_n] = [i]
-									
-								all_win_sizes[flow][j][i].append(win_size)
 
 
 					# Accumualate non-video bytes (expert feature)
@@ -567,15 +860,7 @@ class QOE_Classifier:
 							# Populate byte stats with most active flows
 							byte_stats[current_best_n[k]][i][j] = byte_statistics[j][all_flows[k]][i]
 							# Populate corresponding expert features
-							if len(all_win_sizes[all_flows[k]][j][i]) > 0:
-								win_sizes[current_best_n[k],i,j] = np.max(all_win_sizes[all_flows[k]][j][i])
-							else:
-								if i > 0:
-									# Use the previous value if it's available
-									win_sizes[current_best_n[k],i,j] = win_sizes[current_best_n[k],i-1,j]	
-								else:
-									win_sizes[current_best_n[k],i,j] = 0
-							dup_acks[current_best_n[k],i,j] = (all_flows[k] in dup_acks_by_t[i][j])
+							dup_acks[current_best_n[k],i,j] = dup_acks_by_t[i][j].count(all_flows[k])
 
 				size_byte_stats = byte_stats.shape
 				to_viz, n_to_plot = [], 40
@@ -590,22 +875,20 @@ class QOE_Classifier:
 					# Total non-video bytes up to this point
 					non_video_bytes = non_video_total_bytes[i] / (10 * self.max_dl)
 					
-					
-
-					total_n_channels = 6
-					other_temporal_features = np.zeros((self.n_flows, self.history_length,total_n_channels-2))
+					other_temporal_features = np.zeros((self.n_flows, self.history_length, self.total_n_channels - 2))
 					# Total bytes for each (video) flow (u/d)
 					total_bytes_ud = self.get_recent_frames(i, total_bytes) / ( self.max_dl * 10 ) # want to make it roughly the same scale as the other features 
-					# win_size_ud = self.get_recent_frames(i, win_sizes) / 66e3 # 2 bytes
 					# dup ack instaces 
-					dup_acks_ud = self.get_recent_frames(i, dup_acks)
-					# other_temporal_features[:,:,0:2] = win_size_ud
+					dup_acks_ud = self.get_recent_frames(i, dup_acks) / self.ack_norm
 					other_temporal_features[:,:,0:2] = dup_acks_ud
-					other_temporal_features[:,:,2:] = total_bytes_ud
+					other_temporal_features[:,:,2:4] = total_bytes_ud
+
+
 					
-					expert_features = np.zeros((1,self.history_length,total_n_channels))
-					expert_features[0,0,0] = non_video_bytes
+					expert_features = np.zeros((1,self.history_length,self.total_n_channels))
+					expert_features[0,0,0] = i / MAX_TIME # non_video_bytes
 					expert_features[0,1,0] = pred_service_type
+					# Other ideas -- elapsed time
 
 					# End handcrafted features
 
@@ -615,16 +898,23 @@ class QOE_Classifier:
 					# only reveal up to the current timestep
 
 					temporal_image = self.get_recent_frames(i, byte_stats)
+					get_request_indicator = (temporal_image[:,:,0] > GET_REQUEST_SIZE).astype(np.int64)
+					other_temporal_features[:,:,4] = get_request_indicator
+
+
 					# Clip between 0 and 1 (not guaranteed, but likely)
 					temporal_image = temporal_image / self.max_dl
 
 					# label for this time step
-					lab = self.get_qoe_label(example,i - bin_start, _type)
-					actual_labels = self.actual_labels
-					if lab is None:
+					labs = self.get_qoe_label(example,i - bin_start, _type)
+					
+					if labs is None:
 						continue
+					actual_labels = self.actual_labels
+					class_lab, reg_lab = labs
+
 					if False:
-						to_viz.append((temporal_image,lab,actual_labels))
+						to_viz.append((temporal_image,class_lab,actual_labels))
 						if len(to_viz) == n_to_plot:
 							self.visualize_example("{}-{}".format(_type, example['_id']), 
 								to_viz)
@@ -634,7 +924,7 @@ class QOE_Classifier:
 					features = np.concatenate([temporal_image, other_temporal_features], axis=2)
 					features = np.concatenate([features, expert_features], axis=0)
 					session_features.append(features)
-					session_labels.append(lab)
+					session_labels.append(class_lab)
 					session_metadata.append({
 						"time_slot": i, # time slot in the capture
 						"type": _type, # type of servie
@@ -646,6 +936,8 @@ class QOE_Classifier:
 					self.X["all"].append(feature)
 					self.Y["all"].append(lab)
 					self.metadata["all"].append(metadata)
+					# TODO - maybe fix
+					self.Y_reg["all"].append(reg_lab)
 
 		self.X["train"], self.Y["train"], self.X["val"], self.Y["val"], self.metadata['train'], self.metadata['val'] = get_even_train_split(
 			self.X["all"], self.Y["all"], self.metadata['all'], self.train_proportion, is_dist=True)
@@ -659,10 +951,55 @@ class QOE_Classifier:
 				del self.Y[tv][i]
 				del self.metadata[tv][i]
 
+	def predict_from_model(self, label_type, service_type, _x):
+
+		# Classifier classifies an interval of buffer
+		# lower is a cautious classification while mean is possibly more accurate
+		method = "lower" # "mean"
+		
+
+		if self.models[label_type] is None:
+			self.load_model(label_type)
+		predicted_distributions = self.models[label_type].predict(_x)
+		predicted_classes = [np.argmax(prediction) for prediction in predicted_distributions]
+		# Convert predicted classes into the values they represent
+		predicted_values = []
+		if label_type == "buffer":
+			for predicted_class in predicted_classes:
+				if method == "mean":
+					# Return mean of the buffer interval
+					if self.buffer_intervals[service_type][predicted_class][-1] == np.inf:
+						predicted_values.append(self.buffer_intervals[service_type][predicted_class][0])
+					else:
+						predicted_values.append(np.mean(self.buffer_intervals[service_type][predicted_class]))
+				else:
+					predicted_values.append(self.buffer_intervals[service_type][predicted_class][0])
+		else:
+			raise ValueError("Label type {} not yet implemented in QOE_Classifier.predict_from_model.".format(label_type))
+
+		return predicted_values
+
 	def save_train_val(self):
 		# saves the training and validation sets to pkls
 		# each label_type type gets its own train + val set, since each will get its own classifier (at least for now)
-		for i,label_type in enumerate(self.label_types):
+		if self.append_tv:
+			for label_type in self.label_types:
+				# load old data and append new data to it
+				t_fn, v_fn = os.path.join(self.features_dir, "{}-{}.pkl".format(label_type,"train")),\
+					os.path.join(self.features_dir,"{}-{}.pkl".format(label_type,"val"))
+				if not os.path.exists(t_fn) or not os.path.exists(v_fn): continue
+				t, v = pickle.load(open(t_fn,'rb')), pickle.load(open(v_fn,'rb'))
+				for t_x, t_y, t_m in zip(t['X'], t['Y'], t['metadata']):
+					self.X['train'][label_type].append(t_x)
+					self.Y['train'][label_type].append(t_y)
+					self.metadata['train'][label_type].append(t_m)
+				for v_x, v_y, v_m in zip(v['X'], v['Y'], v['metadata']):
+					self.X['val'][label_type].append(v_x)
+					self.Y['val'][label_type].append(v_y)
+					self.metadata['val'][label_type].append(v_m)
+
+
+		for label_type in self.label_types:
 			train = {'X': self.X['train'][label_type], 'Y':self.Y['train'][label_type], 'metadata': self.metadata['train'][label_type]}
 			val = {'X': self.X['val'][label_type], 'Y':self.Y['val'][label_type], 'metadata': self.metadata['val'][label_type]}
 			t_fn, v_fn = os.path.join(self.features_dir, "{}-{}.pkl".format(
@@ -701,6 +1038,8 @@ class QOE_Classifier:
 	def temporal_group_session(self, features, labels, metadatas):
 		"""Takes session features, labels, and metadata (sorted in time), 
 			divides them into frames over which we look at average QoE."""
+		# THIS IS BROKEN -- I NEED TO EXCLUDE CASES FOR WHICH I DON'T HAVE ENOUGH 
+		# DATA FROM CONSECUTIVE FRAMES
 		n_frames = int(np.ceil(len(features) / self.frame_length))
 		n_labels = len(self.label_types)
 		feature_frame, label_frame, metadata_frame = None, np.zeros((self.frame_length, n_labels)), []
@@ -776,17 +1115,19 @@ class QOE_Classifier:
 		self.cleanup()
 
 def main():
-
+	#  Loads data & trains video QoE classifier of a certain type
 	import argparse
 	parser = argparse.ArgumentParser()
 	parser.add_argument('--sl', action='store',default="no")
 	parser.add_argument('--pt', action='store', default='quality')
+	parser.add_argument('--recover', action='store_true')
 	args = parser.parse_args()
 
-	qoec = QOE_Classifier(skip_load=args.sl)
+	qoec = QOE_Classifier(skip_load=args.sl,recover_model=args.recover)
 	problem_type = args.pt
 	print("Trying problem type: {}".format(problem_type))
 	qoec.run(problem_type)
+
 
 if __name__ == "__main__":
 	main()

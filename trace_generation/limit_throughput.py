@@ -4,8 +4,8 @@ from subprocess import call, check_output
 
 def limit_throughput(file,_type):
 	wait_time = { # how long to wait before restricting bandwidth (allows website to load w.o error)
-		"youtube": 8,
-		"twitch": 17,
+		"youtube": 15,
+		"twitch": 25,
 		"netflix": 15,
 	}[_type]
 	# Load past throughput limitations
@@ -26,12 +26,12 @@ def limit_throughput(file,_type):
 	while True:
 		interval = np.where(int(time.time()-t_start) % total_time >= bandwidth_trace[:,0])[0][-1]
 		bw_restriction = bandwidth_trace[interval][1] # In bytes/sec, convert to Kbps
-		bw_restriction = int(bw_restriction * 8 / 1000)
+		bw_restriction = 2*int(bw_restriction * 8 / 1000)
 		if bw_restriction != last_bw_restriction:
 			# set the new bw restriction
 			#print("Setting bandwidth restriction to {} kbps".format(bw_restriction))
-			call("tcset ens5 --overwrite --rate {}Kbps --direction incoming --src-port 443 --loss {}%".format(
-				bw_restriction, loss), shell=True)
+			call("tcset {} --overwrite --rate {}Kbps --direction incoming --src-port 443 --loss {}%".format(
+				INTERFACE, bw_restriction, loss), shell=True)
 			# outgoing doesn't really matter, since relatively little data is exiting the network
 			#call("tcset ens5 --rate {}Kbps --direction outgoing".format(bw_restriction), shell=True)
 			#print(check_output("tcshow ens5", shell=True))

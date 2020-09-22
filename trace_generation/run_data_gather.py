@@ -10,6 +10,8 @@ import numpy as np, re, csv, pickle
 
 from constants import *
 
+from qoe_classifier import QOE_Classifier
+
 class Data_Gatherer:
 	def __init__(self):
 		self.n_to_collect = 150 # number of videos or sessions to visit
@@ -28,8 +30,8 @@ class Data_Gatherer:
 		self.tc = True # whether or not to run traffic control, encourages more interesting experiments
 		self.run_each = { # whether or not I want to run data collection for each service
 			"netflix": False,
-			"youtube": True,
-			"twitch": False,
+			"youtube": False,
+			"twitch": True,
 			"no_video": False,
 		}
 
@@ -40,6 +42,7 @@ class Data_Gatherer:
 			chrome_options.binary_location = CHROME_BINARY_LOCATION
 			chrome_options.add_argument("--window-size=2000,3555") # Needs to be big enough to get all the resolutions
 			caps = webdriver.common.desired_capabilities.DesiredCapabilities.CHROME
+			chrome_options.add_argument("--disable-quic")
 			caps['goog:loggingPrefs'] = {'performance': 'ALL'}
 			self.driver = webdriver.Chrome(chrome_options=chrome_options, desired_capabilities=caps)
 		else:
@@ -75,7 +78,16 @@ class Data_Gatherer:
 		# to prevent space problems, aggregate after each run
 		call("python data_aggregator.py --mode run --type {}".format(
 			_type), shell=True) 
-
+		# # to prevent space problems further, occasionally add to the train/val sets and delete features pkl file
+		# if np.random.random() > .97:
+		# 	self.refresh_features(_type)
+	
+	def refresh_features(self, _type):
+		qoec = QOE_Classifier()
+		qoec.load_data('raw')
+		qoec.make_train_val()
+		qoec.save_train_val()
+		call("rm features/{}-features.pkl".format(_type), shell=True)
 
 	def netflix_login(self):
 		self.driver.get(self.netflix_login_url)
@@ -209,9 +221,10 @@ class Data_Gatherer:
 
 				# we are on the splash page, go through all the channels on the page and get the profile names
 				i = 0
+				print("Looking for Twitch profiles to watch.")
 				while len(self.twitch_profiles) < self.n_to_collect and i < max_n_iters:
 					all_video_boxes = self.driver.find_elements_by_css_selector('div.tw-flex-grow-1.tw-flex-shrink-1.tw-full-width.tw-item-order-2.tw-media-card-meta__text-container\
-					 > div.tw-media-card-meta__links > div:nth-child(1) > p > a')
+						 > div.tw-media-card-meta__links > div:nth-child(1) > p > a')
 					for video_box in all_video_boxes:
 						if "directory" not in video_box.get_attribute('href'): # this is a link to a general game directory
 							# TODO - check to make sure the channel name is unicode (not foreign)

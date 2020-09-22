@@ -1,11 +1,13 @@
 import matplotlib
-matplotlib.use('Agg')
+#matplotlib.use('Agg')
 import pickle, matplotlib.pyplot as plt, os
 from helpers import *
+from constants import *
 
 # Script used to look at statistics of streams (what typical buffer healths are, chunk sizes, etc..)
 
 _types = ["netflix", "youtube", "twitch"]
+_types = ["twitch"]
 x = {t:None for t in _types}
 cdf_x = {t:None for t in _types}
 quality_to_pixels = {}
@@ -70,11 +72,41 @@ for _type in buffer_health_deltas:
 	plt.close()
 
 # Plot buffer healths
+n_classes = 10
+percentiles = np.linspace(0,.99,n_classes+1)[1:]
 for _type in buffer_healths:
+	x,cdf_x = buffer_healths[_type]
 	plt.plot(buffer_healths[_type][0], buffer_healths[_type][1], label=_type)
 	print("Type: {} - max: {}".format(_type, np.max(buffer_healths[_type][0])))
+	print("Mean: {}".format(np.mean(buffer_healths[_type])))
+	print("Random guessing MAE: {}".format(np.mean(np.abs(np.mean(buffer_healths[_type]) - buffer_healths[_type]))))
+	# Look at percentiles of interest, to determine 
+	# splitting points for equal amounts of data in each class
+	for p_ile in percentiles:
+		stat = x[[i for i,val in enumerate(cdf_x) if val >= p_ile][0]],
+		print("{}th %ile -- {}".format(int(p_ile*100), stat))
 plt.xlabel("Buffer (s)")
 plt.ylabel("CDF of reports")
 plt.title("Comparisons of Buffer Healths in Reports")
 plt.legend()
 plt.savefig("figures/BH.pdf")
+
+
+# Look at buffer features
+buffer_features = pickle.load(open("features/buffer_regression-val.pkl",'rb'))
+examples = buffer_features["X"]
+by_channel = []
+for i in range(TOTAL_N_CHANNELS):
+	by_channel.append([])
+	for el in examples:
+		flattened_el = np.sum(el[:,:,i],axis=1).flatten()
+		for num in flattened_el:
+			by_channel[i].append(num)
+f,ax = plt.subplots(3,3)
+for i in range(TOTAL_N_CHANNELS):
+	row_i = i % 3
+	col_i = i // 3
+	x,cdf_x = get_cdf_xy(by_channel[i])
+	ax[row_i,col_i].semilogx(x,cdf_x)
+	ax[row_i,col_i].set_title("Channel {}".format(i))
+plt.show()

@@ -8,7 +8,7 @@ else
 
 	time_experiment=$(date +"%s")
 	pcap_fname="pcaps/$1_${time_experiment}.pcap"
-	sudo tshark -i ens5 -f "not (port ssh or port ntp)" -w $pcap_fname &
+	sudo tshark -Q -i ens5 -f "not (port ssh or port ntp)" -w $pcap_fname &
 	# Call the program
 	source ../venv/bin/activate
 	if [ "$1" == "youtube" ]

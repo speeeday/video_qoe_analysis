@@ -58,12 +58,12 @@ class SingleSwitchTopo(Topo):
         self.addLink(switch2,switch4, cls=TCLink)#, bw=6) # BOTTLENECK LINK (all clients are limited by this link)
 
         
-        for h in xrange(int(math.ceil(n/2))):
+        for h in range(int(math.ceil(n/2))):
             host = self.addHost('h%d' % (h + 1))
             self.addLink(host, switch3)
             self.host_objects.append(host)
 
-        for h in xrange(n-int(math.ceil(n/2))):
+        for h in range(n-int(math.ceil(n/2))):
             host = self.addHost('h%d' % (h + int(math.ceil(n/2)) + 1))
             self.addLink(host, switch4)
             self.host_objects.append(host)
@@ -81,7 +81,7 @@ def main():
         call("mkdir -p {}".format(logfile_dir), shell=True)
     else:
         print("ID: '{}' already exists.")
-        os.sys.exit()
+        #os.sys.exit()
     
     outfile = logfile_dir + "/" + args.id
     
@@ -101,14 +101,14 @@ def main():
 
 
 #    raw_input()
-    os.system('sudo touch {}'.format(outfile+".pcapng"))
+    #os.system('sudo touch {}'.format(outfile+".pcapng"))
 #    os.system('sudo touch {}'.format(outfile+"-downlink.pcapng"))
     
-    os.system('sudo dumpcap -i s1-eth1 -w {} &'.format(outfile+".pcapng"))
+    #os.system('sudo dumpcap -i s1-eth1 -w {} &'.format(outfile+".pcapng"))
 #    os.system('sudo dumpcap -i s2-eth1 -w {} &'.format(outfile+"-downlink.pcapng"))
     sleep(3)
 
-    os.system('sudo chown sj:sj /home/sj/research/video_qoe_analysis/trace_generation/results/{}/'.format(args.id))
+    #os.system('sudo chown sj:sj /home/sj/research/video_qoe_analysis/trace_generation/results/{}/'.format(args.id))
     sleep(1)
     
     ### EXPERIMENT CODE START ###
@@ -141,7 +141,9 @@ def main():
 
     for i in range(num_hosts):
         curr_client = net.get(topo.host_objects[i])
-        curr_client.cmd('bash /home/sj/research/video_qoe_analysis/trace_generation/run_netflix_client_with_stats.sh {} {} &'.format(args.id, i+1), shell=True)
+        print(curr_client.cmdPrint("route -n"))
+        print(curr_client.cmdPrint("ping 8.8.8.8"))
+        #curr_client.cmd('bash /home/sj/research/video_qoe_analysis/trace_generation/run_netflix_client_with_stats.sh {} {} &'.format(args.id, i+1), shell=True)
 
 #    client1 = net.get(topo.host_objects[0])
 #    client2 = net.get(topo.host_objects[1])
@@ -166,7 +168,7 @@ def main():
     
     ### EXPERIMENT CODE END   ###
     
-    print "Done !"
+    print("Done !")
     # Hang on the CLI before we exit manually
 
     CLI( net )

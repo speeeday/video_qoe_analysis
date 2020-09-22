@@ -46,25 +46,32 @@ class Twitch_Video_Loader:
 		"""Some videos are labeled with an 'only for mature audiences' thing that you have to click to proceed. Click it."""
 		try:
 			self.driver.find_element_by_css_selector("div.content-overlay-gate__allow-pointers.tw-mg-t-3 > button > div > div").click()
-			print("Clicked mature button.")
+			print("msg\tClicked mature button.")
 		except:
-			print("Not mature stream.")
+			print("msg\tNot mature stream.")
 
-	def done_watching(self):
+	def done_watching(self, buffer_health):
 		# max time
 		if self.max_time is not None:
 			if time.time() - self.t_initialize > self.max_time:
 				print("Max time reached - exiting.")
 				return True
 
-		if np.random.random() < .99:
+		if buffer_health is not None:
+			if buffer_health + time.time() - self.t_initialize > self.max_time:
+				# either the buffer has grown to the point where the simulation ceases
+				# to be interesting, or we're near the end of the video
+				return True
+
+		if np.random.random() < .995:
 			# the following checks are expensive, so only perform them occasionally
 			return False
 
+		print("msg\tPerforming (expensive) checks to see if user has stopped streaming or is hosting someone else.")
 		# check if hosting someone else (untested)
 		try:
 			self.driver.find_element_by_css_selector("div.channel-root__player-container.tw-pd-b-2 > div > div > div > div > div > a > div > figure")
-			print("User is hosting someone else - exiting.")
+			print("msg\tUser is hosting someone else - exiting.")
 			# is hosting
 			return True
 		except:
@@ -75,7 +82,7 @@ class Twitch_Video_Loader:
 			self.driver.find_element_by_css_selector("div.follow-panel-overlay.tw-absolute.tw-align-items-start.tw-border-radius-small.tw-c-\
 				background-overlay.tw-c-text-overlay.tw-elevation-1.tw-flex.tw-flex-column.tw-pd-1.tw-transition.tw-transition\
 				--duration-medium.tw-transition--enter-done.tw-transition__slide-over-top.tw-transition__slide-over-top--enter-done")
-			print("User is offline - exiting.")
+			print("msg\tUser is offline - exiting.")
 			return True
 		except:
 			pass
@@ -90,21 +97,21 @@ class Twitch_Video_Loader:
 				title_text = self.driver.find_element_by_css_selector("span.tw-c-text-overlay").text
 				if "Hosting" in title_text:
 					# stream has ended
-					print("Note -- this stream is over and the user is hosting someone else.")
+					print("msg\tNote -- this stream is over and the user is hosting someone else.")
 					return True
 				if "Squad" in title_text:
-					print("Note -- this user is squad streaming with others.")
+					print("msg\tNote -- this user is squad streaming with others.")
 					return True
 				time.sleep(1)
 				if time.time() - t_start > self.max_ad_wait_interval:
-					print("Note -- max ad wait interval hit... refreshing")
+					print("msg\tNote -- max ad wait interval hit... refreshing")
 					self.save_screenshot("waiting_for_ads.png")
 					refreshed = True
 					# some non-conforming page probably
 					return False
 			except:
 				# no ads
-				print("Couldn't find any ads, returning")
+				print("msg\tCouldn't find any ads, returning")
 				return True
 
 	def is_buffering(self, link):
@@ -127,7 +134,7 @@ class Twitch_Video_Loader:
 		# write all data to file
 		for link in self.video_statistics:
 			if self.video_statistics[link]["stats"] == []:
-				print("No stats for {}".format(link))
+				print("msg\tNo stats for {}".format(link))
 				continue
 			video_hash = re.search("twitch\.tv\/(.+)",link).group(1)
 			fn = os.path.join(self.logfile_dir, self.log_prefix + video_hash)
@@ -240,7 +247,7 @@ class Twitch_Video_Loader:
 						break
 				except:
 					pass
-			if not adv_i:
+			if adv_i is None:
 				raise ValueError("Couldn't find the Advanced button.")
 			# Now click the advanced tab
 			self.driver.find_element_by_css_selector("div.settings-menu-button-component.settings-menu-button-component--forced-dark-theme.tw-root--hover.tw-root--theme-dark >\
@@ -289,6 +296,7 @@ class Twitch_Video_Loader:
 				with_fps_re = re.search("Video Resolution(.+)Display Resolution(.+)FPS(.+)Skipped Frames(.+)Buffer Size(.+) sec\.Latency To Broadcaster(.+) sec\.Latency Mode(.+)Playback Rate(.+) KbpsBackend Version(.+)Serving ID(.+)Codecs(.+)Play Session ID(.+)", video_stats_text)
 				# right when it loads there are no codecs
 				before_loading_re = re.search("Video Resolution(.+)Display Resolution(.+)Skipped Frames(.+)Buffer Size(.+) sec\.Latency To Broadcaster(.+) sec\.Latency Mode(.+)Playback Rate(.+) KbpsBackend VersionServing ID(.+)Play Session ID(.+)", video_stats_text)
+				buffer_health = None
 				try:
 					if with_fps_re: 
 						# playing or paused
@@ -320,16 +328,14 @@ class Twitch_Video_Loader:
 						bitrate = int(no_fps_re.group(7))
 					elif before_loading_re:
 						# do nothing, just wait for it to load
-						print("No stats at all: {}".format(video_stats_text))
+						# print("msg\tNo stats at all: {}".format(video_stats_text))
 						time.sleep(np.maximum(self.pull_frequency - (time.time() - t_calls),.001))
 						continue
 					else:
-						print("Didn't match either.... {} ".format(video_stats_text))
+						# print("msg\tDidn't match either.... {} ".format(video_stats_text))
 						continue
-					if np.random.random() > .9:
-						# Print every now and then
-						print("Res : {} Buf health: {} state: {}".format(
-							current_optimal_res, buffer_health, state))
+					print("stats\tresolution\t{}\tbuffer health\t{}\tstate\t{}".format(
+						current_optimal_res, buffer_health, state))
 
 					self.video_statistics[link]["stats"].append({
 						"current_optimal_res": current_optimal_res,
@@ -344,12 +350,13 @@ class Twitch_Video_Loader:
 				except:
 					# if the video rebuffers mid-loop, the regex will fail
 					# just ignore this
-					print("Hit an error trying to retrieve stats...")
+					print("msg\tHit an error trying to retrieve stats...")
 					print(video_stats_text)
 					print(sys.exc_info())
+					break
 
 				# Check to see if video is almost done
-				if self.done_watching():
+				if self.done_watching(buffer_health):
 					stop = True
 					from selenium.webdriver.common.keys import Keys
 					# pause
@@ -364,7 +371,7 @@ class Twitch_Video_Loader:
 
 		except Exception as e:
 			self.save_screenshot("went_wrong_{}.png".format(self._id))
-			print(sys.exc_info())
+			print("error\t{}".replace("\n"," ").format(sys.exc_info()))
 		finally:
 			self.shutdown()
 

@@ -137,8 +137,9 @@ class Data_Aggregator:
 				bin_of_interest = int(np.floor(((ts - t_start) / self.t_interval)))
 				self.bytes_transfered[0][dst_ip, source_port][bin_of_interest] += ip_pkt.len
 
+				is_get_req = ip_pkt.len > GET_REQUEST_SIZE
 				# record tport layer values
-				self.bytes_transfered[2][dst_ip, source_port][bin_of_interest].append([seq_n, ack_n, win_s])
+				self.bytes_transfered[2][dst_ip, source_port][bin_of_interest].append([seq_n, ack_n, is_get_req])
 
 			elif self.is_internal(dst_ip):
 				# incoming packet
@@ -151,7 +152,7 @@ class Data_Aggregator:
 				self.bytes_transfered[1][src_ip,dest_port][bin_of_interest] += ip_pkt.len
 
 				# record tport layer values
-				self.bytes_transfered[3][src_ip, dest_port][bin_of_interest].append([seq_n, ack_n, win_s])
+				self.bytes_transfered[3][src_ip, dest_port][bin_of_interest].append([seq_n, ack_n, 0])
 
 			else:
 				print("Neither src: {} nor dst: {} are internal...".format(src_ip, dst_ip))

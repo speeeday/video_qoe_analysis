@@ -1,7 +1,8 @@
 from constants import *
-import numpy as np, os, pickle
+import numpy as np, os, pickle, struct, socket
 from copy import deepcopy
 from bisect import bisect_left
+import shutil
 
 def get_difference(set1, set2):
 	"""Gets set1 - set2."""
@@ -18,6 +19,30 @@ def get_asn_dist(asns):
 	assert np.sum(asn_dist) > 0
 
 	return asn_dist / np.sum(asn_dist) 
+
+def make_mask(n):
+	"""return a mask of n bits as a long integer"""
+	return (2<<n-1) - 1
+
+def dotted_quad_to_num(ip):
+	"""convert decimal dotted quad string to long integer"""
+	return struct.unpack('<L',socket.inet_aton(ip))[0]
+
+def network_mask(ip,bits):
+	"""Convert a network address to a long integer"""
+	return dotted_quad_to_num(ip) & make_mask(bits)
+
+def address_in_network(ip, net, netmask):
+	"""Is an address in a network"""
+	return ip & netmask == net
+
+def is_internal(ip):
+	ip_num = dotted_quad_to_num(ip)
+	for net in INTERNAL_NETWORKS:
+		net = net.split("/")
+		if address_in_network(ip_num,dotted_quad_to_num(net[0]),make_mask(int(net[1]))):
+			return True
+	return False
 
 def get_ip_likelihood(ip_list, _type, modify=False):
 
@@ -177,3 +202,37 @@ def get_even_train_split(all_x, all_y, all_metadata, train_proportion,
 				[Y[k][problem_type].append(examples_by_label[i][j][1]) for j in example_indices]
 				[metadata[k][problem_type].append(examples_by_label[i][j][2]) for j in example_indices]
 	return X["train"], Y["train"], X["val"], Y["val"], metadata['train'], metadata['val']
+
+def service_tls_hostnames(hostname):
+	if "googlevideo.com" in hostname:
+		return "youtube"
+	elif "nflxvideo.net" in hostname:
+		return "netflix"
+	elif "ttvnw.net" in hostname:
+		return "twitch"
+	else:
+		raise KeyError
+
+def clear_path(path):
+    """
+    Clears the entire directory represented by path if it exists.
+    """
+    if not os.path.exists(path):
+        return
+
+    for file in os.listdir(path):
+        file_path = os.path.join(path, file)
+        try:
+            if os.path.isfile(file_path):
+                os.unlink(file_path)
+            elif os.path.isdir(file_path):
+                shutil.rmtree(file_path)
+        except Exception as e:
+            print(e)
+
+def make_path(path):
+    """
+    Makes all directories represented by path
+    """
+    if not os.path.exists(path):
+        os.makedirs(path, exist_ok=True)

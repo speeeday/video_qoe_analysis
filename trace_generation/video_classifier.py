@@ -16,7 +16,7 @@ class Video_Classifier_v2:
 		self.model = None
 		self.metadata_dir = METADATA_DIR
 		self.train_proportion = .8
-		self._types = ["twitch", "netflix", "youtube"]
+		self._types = VIDEO_SERVICES
 		self.type_to_class = {t:i+1 for i,t in enumerate(self._types)}
 		#self._types = ["netflix"]
 		self.type_to_label_mapping = {_type : i for i,_type in enumerate(self._types)}
