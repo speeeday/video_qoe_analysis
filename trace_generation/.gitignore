@@ -10,3 +10,4 @@ screenlog*
 error_reports/*
 profiles
 models
+credentials/*.json

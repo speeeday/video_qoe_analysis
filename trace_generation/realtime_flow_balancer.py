@@ -1,6 +1,6 @@
 from subprocess import Popen, PIPE, STDOUT, call, check_output
 from threading import Thread, Lock
-import queue, time, os, signal, re, numpy as np, sys, traceback, select
+import queue, time, os, signal, re, numpy as np, sys, traceback, select, zmq
 from constants import *
 from helpers import *
 from abr_modeler import ABR_Modeler
@@ -71,7 +71,7 @@ class Proc_Out_Reader:
 			time.sleep(.1)
 
 class RealTime_Data_Collector:
-	def __init__(self):
+	def __init__(self, use_perfect=False):
 
 		# Wait until the interface of interest is up
 		print("Waiting for Mininet interface to be created.")
@@ -150,6 +150,10 @@ class RealTime_Data_Collector:
 		self.qoe_classifier = QOE_Classifier()
 		self.buffer_regressor = Buffer_Regressor()
 
+		self.use_perfect = use_perfect
+		if self.use_perfect:
+			self.setup_zmq_pull()
+
 		def get_predict_fn(qoe_metric, service_type):
 			# if qoe_metric == "buffer":
 			# 	return lambda features : self.qoe_classifier.predict_from_model("buffer", service_type, features)
@@ -173,6 +177,10 @@ class RealTime_Data_Collector:
 		self.qoe_balancer = QOE_Balancer()
 		self.default_available_bw = AVAILABLE_BW
 
+		## Logging File
+		log_fn = "logs/realtime_balance_logs/{}-session.log".format(int(self.t_start))
+		self.log_f = open(log_fn, 'w')
+
 	def add_service_flow(self, src_ip, service, f_id):
 		try:
 			self.players[src_ip]
@@ -189,6 +197,7 @@ class RealTime_Data_Collector:
 				"predictions": {pm: [] for pm in self.prediction_metrics},
 				"bandwidth_allocations": [],
 				"t_added": time.time(),
+				"ground_truth_values": {pm: [] for pm in self.prediction_metrics}
 		}
 		self.players[src_ip]["metadata"]["ordered_flows"].append(f_id)
 		self.players[src_ip]["flows"][f_id] = {
@@ -419,6 +428,21 @@ class RealTime_Data_Collector:
 				# 	sum(el[1] for el in this_flow["byte_data"][1])))
 			#print("\n")
 
+	def log_stat(self, stat_type, _obj):
+		# Logs statistics to log file, 
+		# _obj is structured differently, depending on what we log
+		if stat_type == "bw_restriction":
+			# _obj is list of (player_ip, bw_restriction, time) for each player
+			log_str = "\t".join("{} {} {}".format(player, bw_restriction, time) 
+				for player,bw_restriction,time in _obj)
+		elif stat_type == "pred":
+			# _obj is list of (player_ip, predicted_metric_type, predicted_value, time)
+			log_str = "\t".join("{} {} {} {}".format(player, _type, val, time) 
+				for player, _type, val, time in _obj)
+		else:
+			raise ValueError("Stat type {} not implemented in logger.".format(stat_type))
+		self.log_f.write("{}\t{}\n".format(stat_type, log_str))
+
 	def read_tshark(self, process_names=None):
 		# Read all output from all processes
 		if process_names is None:
@@ -497,6 +521,7 @@ class RealTime_Data_Collector:
 	def set_bandwidth(self, player_keys, optimal_bandwidth_allocation):
 		i = 0
 		call("tcdel {} --all".format(INTERFACE), shell=True)
+		log_obj = []
 		for pk, bwa in zip(player_keys, optimal_bandwidth_allocation):
 			bwa = np.maximum(int(bwa / 1000), 100) # allow a trickle of data 
 			print("Seting player {} BW to {} Kbps".format(pk, bwa))
@@ -507,6 +532,15 @@ class RealTime_Data_Collector:
 				call("tcset {} --network {}/32 --rate {}Kbps --add &".format(
 				INTERFACE, pk, bwa), shell=True)
 			i +=1
+
+			log_obj.append((pk, bwa, time.time()))
+		# Log bw limitations for post-mortem analysis
+		self.log_stat("bw_restriction", log_obj)
+
+	def setup_zmq_pull(self):
+		context = zmq.Context()
+		self.zmq_pull_socket = context.socket(zmq.PULL)
+		self.zmq_pull_socket.bind("tcp://127.0.0.1:{}".format(ZMQ_PORT))
 
 	def spawn_tshark(self, _type, **kwargs):
 		# one master tshark listener that watches for TLS hostnames
@@ -550,14 +584,34 @@ class RealTime_Data_Collector:
 				
 				if all_player_features == []: continue
 
-				# Call the prediction function
-				if prediction_metric == 'bitrate':
-					print(all_player_features)
-				predicted_metrics = self.prediction_models[prediction_metric][service](np.array(all_player_features))
-				print(predicted_metrics)
+				if not self.use_perfect or prediction_metric != "buffer":
+					# Call the prediction function
+					predicted_metrics = self.prediction_models[prediction_metric][service](np.array(all_player_features))
+				else: # buffer and we want to use perfect information
+					# get the buffers from the zmq stream
+					stats_msg = None
+					while True:
+						try:
+							stats_msg = self.zmq_pull_socket.recv_pyobj(flags=zmq.NOBLOCK)
+							# update players with new info
+							for player in stats_msg:
+								for k in stats_msg[player]:
+									self.players["10.0.0.{}".format(player+1)]["ground_truth_values"][k].append(
+										stats_msg[player][k])
+						except zmq.ZMQError:
+							break # No new messages
+					# use most recent ground truth info for each player
+					try:
+						predicted_metrics = [self.players[player]["ground_truth_values"]["buffer"][-1] for player in self.players]
+					except IndexError:
+						# no information yet -- just wait
+						continue
 				# save predictions for other parts of the pipeline
 				for predicted_metric, player in zip(predicted_metrics, these_players):
 					self.players[player]["predictions"][prediction_metric].append((time.time(), predicted_metric))
+				# Log predictions for post-mortem analysis
+				self.log_stat("pred", [(player, prediction_metric, predicted_metric, time.time()) 
+					for predicted_metric, player in zip(predicted_metrics, these_players)])
 
 	def process_packets(self):
 		try:
@@ -603,17 +657,22 @@ class RealTime_Data_Collector:
 
 	def loop_packet_processor(self):
 		i=0
-		while True:
-			self.process_packets() # process these packets
-			for periodic_check in self.periods:
-				if time.time() - self.periods[periodic_check]["last"] > self.periods[periodic_check]["period"]:
-					self.periods[periodic_check]["f"]()
-					self.periods[periodic_check]["last"] = time.time()
-			i+=1
-			time.sleep(.05)
+		try:
+			while True:
+				self.process_packets() # process these packets
+				for periodic_check in self.periods:
+					if time.time() - self.periods[periodic_check]["last"] > self.periods[periodic_check]["period"]:
+						self.periods[periodic_check]["f"]()
+						self.periods[periodic_check]["last"] = time.time()
+				i+=1
+				time.sleep(.05)
+		finally:
+			if self.use_perfect:
+				self.zmq_pull_socket.close()
+			self.log_f.close()
 
 def main():
-	rdc = RealTime_Data_Collector()
+	rdc = RealTime_Data_Collector(use_perfect=True)
 	t1 = Thread(target=rdc.read_tshark, kwargs={"process_names":["tls"]}, daemon=True)
 	t2 = Thread(target=rdc.loop_packet_processor)
 	rdc.threads["tls"] = {"thread": t1, "reader": None}

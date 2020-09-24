@@ -10,9 +10,13 @@ from mininet.link import TCLink
 from subprocess import Popen, PIPE, STDOUT, call, check_output
 from threading import Thread, Lock
 import queue, time, os, signal, re, numpy as np, sys, math, traceback
+import zmq
 
 import matplotlib.pyplot as plt
 import matplotlib.animation as matani
+
+
+from constants import *
 
 class Proc_Out_Reader:
 	def __init__(self):
@@ -54,7 +58,7 @@ class SingleSwitchTopo(Topo):
 			self.host_objects.append(host)
 
 class Client_Manager:
-	def __init__(self):
+	def __init__(self, publish_stats=False):
 		self.num_hosts = 2
 		self.clients = {}
 		self.client_message_queue = {}
@@ -65,15 +69,6 @@ class Client_Manager:
 		self.client_reports = {}
 		self.t_start = time.time()
 
-		# set up necessary display parameters
-		self.n_rows_plot = int(np.ceil(np.sqrt(self.num_hosts)))
-		fig, ax = plt.subplots(self.n_rows_plot,self.n_rows_plot)
-		self.display_objs = {
-			"fig": fig,
-			"ax": ax,
-			"animation": self.qoe_animation
-		}
-		
 		self.periods = {
 			"update_plots": {
 				"f": self.update_client_stats_plots,
@@ -81,6 +76,10 @@ class Client_Manager:
 				"last": 0,
 			},
 		}
+
+		self.publish_stats = publish_stats
+		if self.publish_stats:
+			self.setup_zmq_push()
 
 		# TODO
 		# start random services, random videos in those services
@@ -92,6 +91,8 @@ class Client_Manager:
 		call("sudo killall chrome", shell=True)
 		call("sudo killall chromedriver", shell=True)
 		call("sudo killall firefox", shell=True)
+		if self.publish_stats:
+			self.zmq_push_socket.close()
 	
 	def qoe_animation(self, i, *fargs):
 		# This blocks, so would need a separate process with data communication
@@ -113,6 +114,13 @@ class Client_Manager:
 	def get_process(self, client_id, cmd):
 		return self.clients[client_id].popen(cmd, stdout=PIPE, stderr=STDOUT, shell=True)
 
+	def setup_zmq_push(self):
+		context = zmq.Context()
+		self.zmq_push_socket = context.socket(zmq.PUSH)
+		# self.zmq_push_socket.bind("tcp://*:{}".format(ZMQ_PORT))
+		# self.zmq_push_socket.setsockopt(zmq.LINGER, 0)
+		self.zmq_push_socket.connect("tcp://127.0.0.1:{}".format(ZMQ_PORT))
+
 	def process_client_reports(self):
 		try:
 			self.object_lock.acquire()
@@ -129,7 +137,7 @@ class Client_Manager:
 					# do something with the report
 					fields = client_report.split('\t')
 					if fields[0] == 'msg': 
-						print(client_report) # just an informational message
+						print("{} {}".format(process_key, client_report)) # just an informational message
 					elif fields[0] == 'error': 
 						print("Error in process: {}, {}".format(process_key, fields[1]))
 					else:
@@ -140,8 +148,10 @@ class Client_Manager:
 							"t": time.time()
 						})
 				except:
-					print("Error parsing message: {}".format(client_report))
+					print("{} Error parsing message: {}".format(process_key, client_report))
 					print(traceback.format_exc())
+		if self.publish_stats:
+			self.publish_latest_stats(process_keys)
 
 	def read_client_process(self, process_names=None):
 		if process_names is None:
@@ -162,6 +172,16 @@ class Client_Manager:
 			self.threads[process_key]["reader"] = por
 			print("Setting a reader for client: {}".format(process_key))
 			por.enqueue_output(self.client_p[process_key]["process"].stdout, self.client_message_queue[process_key])
+
+	def publish_latest_stats(self, process_keys):
+		# Pushes buffer healths of all players to ZMQ socket, to be read by other interested processes
+		stats_report_obj = {process_key: {"buffer": self.client_reports[process_key][-1]["buffer_health"]}
+			for process_key in process_keys if len(self.client_reports[process_key]) > 0}
+		if stats_report_obj == {}: return
+		try:
+			self.zmq_push_socket.send_pyobj(stats_report_obj)
+		except zmq.ZMQError:
+			print(traceback.format_exc())
 
 	def spawn_client(self, client_id, service_type, service_link, **kwargs):
 		cmd = "sudo -u ubuntu unbuffer /home/ubuntu/video_qoe_analysis/venv/bin/python {}_video.py"\
@@ -221,7 +241,7 @@ class Client_Manager:
 
 
 def main():
-	cm = Client_Manager()
+	cm = Client_Manager(publish_stats=True)
 	cm.run_simple_scenario()
 
 if __name__ == "__main__":

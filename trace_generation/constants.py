@@ -33,3 +33,6 @@ VIDEO_SERVICES = ["twitch", "netflix", "youtube"] # it is useful to have these i
 # Normalizations for features
 BYTE_TRANSFER_NORM = float(.5e6)
 DUP_ACK_NORM = 30
+
+# tcp port over which zmq connection is established
+ZMQ_PORT = 5558

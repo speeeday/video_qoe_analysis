@@ -63,7 +63,7 @@ class Twitch_Video_Loader:
 				# to be interesting, or we're near the end of the video
 				return True
 
-		if np.random.random() < .995:
+		if np.random.random() < .997:
 			# the following checks are expensive, so only perform them occasionally
 			return False
 
@@ -92,6 +92,7 @@ class Twitch_Video_Loader:
 		# You can't skip ads in twitch, so just wait until they go away
 		t_start = time.time()
 		refreshed = False
+
 		while True:
 			try:
 				title_text = self.driver.find_element_by_css_selector("span.tw-c-text-overlay").text
@@ -227,6 +228,15 @@ class Twitch_Video_Loader:
 			while not self.get_rid_of_ads():
 				self.driver.get(link)
 				self.driver.implicitly_wait(5)
+
+			try:
+				print("msg\tTrying to remove annoying popup")
+				css_path = "div.tw-absolute.tw-balloon.tw-balloon--md.tw-balloon--right.tw-balloon--up.tw-block"
+				remove_js = "document.querySelector('{}').remove()".format(css_path)
+				self.driver.execute_script(remove_js)
+			except:
+				print("msg\tUnable to remove annoying popup.")
+				print(sys.exc_info())
 
 			player = self.driver.find_element_by_css_selector(".persistent-player")
 

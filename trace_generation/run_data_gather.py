@@ -10,7 +10,9 @@ import numpy as np, re, csv, pickle
 
 from constants import *
 
-from qoe_classifier import QOE_Classifier
+from buffer_health_regressor import Buffer_Regressor
+from abr_modeler import ABR_Modeler
+from drive_upload_wrapper import Drive_Upload_Wrapper
 
 class Data_Gatherer:
 	def __init__(self):
@@ -34,6 +36,8 @@ class Data_Gatherer:
 			"twitch": True,
 			"no_video": False,
 		}
+
+		self.duw = Drive_Upload_Wrapper()
 
 	def startup(self, chrome=True):
 		if chrome:
@@ -78,16 +82,28 @@ class Data_Gatherer:
 		# to prevent space problems, aggregate after each run
 		call("python data_aggregator.py --mode run --type {}".format(
 			_type), shell=True) 
-		# # to prevent space problems further, occasionally add to the train/val sets and delete features pkl file
-		# if np.random.random() > .97:
-		# 	self.refresh_features(_type)
-	
+		
+		if os.stat("features/{}-features.pkl".format(_type)).st_size > 1e8:
+			self.refresh_features(_type)
+		
 	def refresh_features(self, _type):
-		qoec = QOE_Classifier()
-		qoec.load_data('raw')
-		qoec.make_train_val()
-		qoec.save_train_val()
-		call("rm features/{}-features.pkl".format(_type), shell=True)
+
+		# convert raw features into buffer health regressor feautures
+		bhr = Buffer_Regressor()
+		bhr.load_data('raw')
+		bhr.make_train_val()
+		bhr.save_train_val()
+
+		# convert raw features into abr modeler features
+		abrm = ABR_Modeler()
+		abrm.load_data('raw')
+		abrm.form_train_val_abr_model()
+		abrm.save_train_val()
+
+		# push the raw features to mass storage
+		fn = "features/{}-features.pkl".format(_type)
+		self.duw.upload_pickle(fn)
+		call("rm {}".format(fn), shell=True)
 
 	def netflix_login(self):
 		self.driver.get(self.netflix_login_url)

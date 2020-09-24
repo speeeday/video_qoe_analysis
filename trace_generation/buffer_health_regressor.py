@@ -35,16 +35,15 @@ class K2_Model:
 		# dup_acks = temporal_image[:,:,:,2:4]
 		# cumulative_byte_stats = temporal_image[:,:,:,4:6]
 		# get_requests = temporal_image[:,:,:,6]
-		
+		print(net.shape)
 		net = tf.keras.layers.Conv2D(
 			8,
-			(N_FLOWS,3),
+			(3,3),
 			strides=(1,1),
 			activation=tf.keras.activations.relu,
 			use_bias=True,
 		)(net)
-		net = tf.squeeze(net)
-		net = tf.expand_dims(net,axis=3)
+		print(net.shape)
 		net = tf.keras.layers.Conv2D(
 			16,
 			(3,3),
@@ -52,6 +51,7 @@ class K2_Model:
 			activation=tf.keras.activations.relu,
 			use_bias=True,
 		)(net)
+		print(net.shape)
 		net = tf.keras.layers.Conv2D(
 			16,
 			(3,3),
@@ -59,6 +59,7 @@ class K2_Model:
 			activation=tf.keras.activations.relu,
 			use_bias=True,
 		)(net)
+		print(net.shape)
 
 		net = tf.keras.layers.Flatten()(net)
 
@@ -202,9 +203,7 @@ class Buffer_Regressor:
 
 	def get_augmented_features(self, features):
 		""" Perform data augmentation, to increase the number of examples we have. """
-		all_permutations = list(itertools.permutations(list(range(self.n_flows))))
-
-		perm = all_permutations[np.random.randint(len(all_permutations))]
+		perm = np.random.permutation(list(range(self.n_flows)))
 		# The order of the rows is meaningless, so we can permute them for more data
 		permed_time = features[perm,:,:]
 		other_features = np.expand_dims(features[-1,:,:], axis=0)
@@ -564,23 +563,23 @@ class Buffer_Regressor:
 			self.Y[tv]['buffer_regression'] = [el for iex in example_indices[tv] for el in self.Y['all'][iex] ]
 			self.metadata[tv]['buffer_regression'] = [el for iex in example_indices[tv] for el in self.metadata['all'][iex]]
 
-		n_row = 3
-		n_back = [5,10,15,20,25,30]
-		fig,ax = plt.subplots(n_row,n_row)
-		for i in range(len(n_back)):
-			plt_x,plt_y=[],[]
-			for lab,gr in corr_check:
-				if lab is None: continue
-				plt_x.append(lab[0])
-				plt_y.append(np.sum(np.sum(gr[:,-n_back[i]:,:])))
-			print("N back: {}, min ngr: {}".format(n_back[i], np.min(plt_y)))
-			print(np.sum(plt_y))
-			row_i = i//n_row
-			col_i = i%n_row
-			ax[row_i,col_i].scatter(plt_x,plt_y)
-			ax[row_i,col_i].set_title("{} back".format(n_back[i]))
-		plt.show()
-		exit(0)
+		# # Plotting things about the data
+		# n_row = 3
+		# n_back = [5,10,15,20,25,30]
+		# fig,ax = plt.subplots(n_row,n_row)
+		# for i in range(len(n_back)):
+		# 	plt_x,plt_y=[],[]
+		# 	for lab,gr in corr_check:
+		# 		if lab is None: continue
+		# 		plt_x.append(lab[0])
+		# 		plt_y.append(np.sum(np.sum(gr[:,-n_back[i]:,:])))
+		# 	print("N back: {}, min ngr: {}".format(n_back[i], np.min(plt_y)))
+		# 	print(np.sum(plt_y))
+		# 	row_i = i//n_row
+		# 	col_i = i%n_row
+		# 	ax[row_i,col_i].scatter(plt_x,plt_y)
+		# 	ax[row_i,col_i].set_title("{} back".format(n_back[i]))
+		# plt.show()
 
 	def predict_from_model(self, label_type, service_type, _x):
 		"""Predict outputs based on inputs _x."""
@@ -599,6 +598,10 @@ class Buffer_Regressor:
 	def save_train_val(self):
 		# saves the training and validation sets to pkls
 		# each label_type type gets its own train + val set, since each will get its own classifier (at least for now)
+		if self.append_tv:
+			for label_type in self.label_types:
+				self.load_data(label_type, 'formatted')
+
 		for label_type in self.label_types:
 			train = {'X': self.X['train'][label_type], 'Y':self.Y['train'][label_type], 'metadata': self.metadata['train'][label_type]}
 			val = {'X': self.X['val'][label_type], 'Y':self.Y['val'][label_type], 'metadata': self.metadata['val'][label_type]}
@@ -608,7 +611,7 @@ class Buffer_Regressor:
 			pickle.dump(train, open(t_fn,'wb'))
 			pickle.dump(val, open(v_fn,'wb'))
 
-	def load_data(self, dtype='raw', label_type=None):
+	def load_data(self, label_type, dtype='raw'):
 		if dtype == 'raw':
 			print("Loading raw data")
 			for features_file in glob.glob(os.path.join(self.features_dir, "*-features.pkl")):
@@ -624,17 +627,22 @@ class Buffer_Regressor:
 			t_fn, v_fn = os.path.join(self.features_dir, "{}-{}.pkl".format(label_type,"train")),\
 				os.path.join(self.features_dir,"{}-{}.pkl".format(label_type,"val"))
 			t, v = pickle.load(open(t_fn,'rb')), pickle.load(open(v_fn,'rb'))
-			self.X["train"], self.Y["train"], self.metadata['train'] = np.array(t['X']), np.array(t["Y"]), t['metadata']
-			print(len(self.X['train']))
-			self.X["val"], self.Y["val"], self.metadata['val'] = np.array(v['X']), np.array(v["Y"]), v['metadata']
-			# Shuffle validation
-			perm = list(range(len(self.X['val'])))
-			perm = np.random.permutation(perm)
-			self.X['val'] = self.X['val'][perm]
-			self.Y['val'] = self.Y['val'][perm]
-			self.metadata['val'] = [self.metadata['val'][i] for i in perm]
+			for _x,_y,_md in zip(t['X'], t['Y'], t['metadata']):
+				self.X['train'][label_type].append(np.array(_x))
+				self.Y['train'][label_type].append(np.array(_y))
+				self.metadata['train'][label_type].append(_md)
+			for _x,_y,_md in zip(v['X'], v['Y'], v['metadata']):
+				self.X['val'][label_type].append(np.array(_x))
+				self.Y['val'][label_type].append(np.array(_y))
+				self.metadata['val'][label_type].append(_md)
+			# # Shuffle validation
+			# perm = list(range(len(self.X['val'])))
+			# perm = np.random.permutation(perm)
+			# self.X['val'] = self.X['val'][perm]
+			# self.Y['val'] = self.Y['val'][perm]
+			# self.metadata['val'] = [self.metadata['val'][i] for i in perm]
 		else:
-			raise ValueError("dtype {} not understood".format(dtype))
+			raise ValueError("Data type {} not understood".format(dtype))
 
 	def visualize_example(self, _id, examples):
 		# Show bytes / time, along with label

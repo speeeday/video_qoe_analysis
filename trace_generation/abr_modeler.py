@@ -8,6 +8,7 @@ class ABR_Modeler:
 	"""Models each service's ABR algorithm."""
 	def __init__(self, abr_last_n_bw=3):
 		self.features_dir = "./features"
+		self.append_tv = True
 		self._types = VIDEO_SERVICES[0:1]
 		self.features_data = {t:[] for t in self._types}
 		self.abr_data = {t:
@@ -30,6 +31,7 @@ class ABR_Modeler:
 		self.abr_model = {t:None for t in self._types}
 		self.abr_model_dir = os.path.join(MODEL_DIR, "abr")
 		self.abr_model_name = "abr_forest"
+
 		self.vc = Video_Classifier_v2()
 		self.abr_last_n_bw = abr_last_n_bw
 
@@ -194,24 +196,45 @@ class ABR_Modeler:
 			self.abr_data[_type]["metadata"]["train"] = ret[4][0]
 			self.abr_data[_type]["metadata"]["val"] = ret[5][0]
 
-	def load_data_train_abr_model(self):
-		# Load bandwidth data
-		with open(os.path.join(METADATA_DIR, "all_throughput_limitations.csv")) as f:
-			csvr = csv.reader(f)
-			self.bandwidth_restrictions = list(csvr)
-			# more useful representation
-			self.bandwidth_restrictions = {float(t): float(bw) for t,bw in self.bandwidth_restrictions}
+	def load_data(self, service_type=None, data_type='raw'):
+		if data_type == 'raw':
+			# Load bandwidth data
+			with open(os.path.join(METADATA_DIR, "all_throughput_limitations.csv")) as f:
+				csvr = csv.reader(f)
+				self.bandwidth_restrictions = list(csvr)
+				# more useful representation
+				self.bandwidth_restrictions = {float(t): float(bw) for t,bw in self.bandwidth_restrictions}
 
-		for features_file in glob.glob(os.path.join(self.features_dir, "*-features.pkl")):
-			features_type = re.search("{}/(.+)-features.pkl".format(self.features_dir), features_file).group(1)
-			if features_type not in self._types:
-				continue
-			features = pickle.load(open(features_file,'rb'))
-			for _id, v in features.items():
-				v["_id"] = _id
-				self.features_data[features_type].append(v)
-		self.make_resolution_to_class_mapping()
-		self.make_bitrate_to_class_mapping()
+			for features_file in glob.glob(os.path.join(self.features_dir, "*-features.pkl")):
+				features_type = re.search("{}/(.+)-features.pkl".format(self.features_dir), features_file).group(1)
+				if features_type not in self._types:
+					continue
+				features = pickle.load(open(features_file,'rb'))
+				for _id, v in features.items():
+					v["_id"] = _id
+					self.features_data[features_type].append(v)
+			self.make_resolution_to_class_mapping()
+			self.make_bitrate_to_class_mapping()
+		elif data_type == 'formatted':
+			if service_type is None:
+				raise ValueError("If loading formatted data, you must specify a service type.")
+			# load old data and append new data to it
+			t_fn, v_fn = os.path.join(self.features_dir, "{}-{}-{}.pkl".format(service_type,"abr_model_data","train")),\
+				os.path.join(self.features_dir,"{}-{}-{}.pkl".format(service_type,"abr_model_data","val"))
+			if not os.path.exists(t_fn) or not os.path.exists(v_fn): 
+				print("Warning -- no data to load for ABR Modeler. You need to make the formatted training and validation sets: {} {}".format(t_fn, v_fn))
+				return
+			t, v = pickle.load(open(t_fn,'rb')), pickle.load(open(v_fn,'rb'))
+			for t_x, t_y, t_m in zip(t['X'], t['Y'], t['metadata']):
+				self.abr_data[service_type]['X']['train'].append(t_x)
+				self.abr_data[service_type]['Y']['train'].append(t_y)
+				self.abr_data[service_type]['metadata']['train'].append(t_m)
+			for v_x, v_y, v_m in zip(v['X'], v['Y'], v['metadata']):
+				self.abr_data[service_type]['X']['val'].append(v_x)
+				self.abr_data[service_type]['Y']['val'].append(v_y)
+				self.abr_data[service_type]['metadata']['val'].append(v_m)
+		else:
+			raise ValueError("Service type {} not understood.".format(service_type))
 
 	def make_resolution_to_class_mapping(self):
 		for _type in self.features_data:
@@ -288,6 +311,21 @@ class ABR_Modeler:
 
 		return ret_vals
 
+	def save_train_val(self):
+		# saves the training and validation sets to pkls
+		if self.append_tv:
+			for service_type in self.abr_data:
+				self.load_data(service_type, data_type = 'formatted')
+
+		for service_type in self.abr_data:
+			train = {'X': self.abr_data[service_type]['X']['train'], 'Y': self.abr_data[service_type]['Y']['train'], 'metadata': self.abr_data[service_type]['metadata']['train']}
+			val = {'X': self.abr_data[service_type]['X']['val'], 'Y': self.abr_data[service_type]['Y']['val'], 'metadata': self.abr_data[service_type]['metadata']['val']}
+			t_fn, v_fn = os.path.join(self.features_dir, "{}-{}-{}.pkl".format(
+				service_type, "abr_model_data", "train")), os.path.join(self.features_dir,"{}-{}-{}.pkl".format(
+				service_type,"abr_model_data", "val"))
+			pickle.dump(train, open(t_fn,'wb'))
+			pickle.dump(val, open(v_fn,'wb'))
+
 	def visualize_abr_model(self):
 		# Works, but trees are too big/complicated to get a sense of
 		from sklearn.tree import export_graphviz
@@ -305,11 +343,18 @@ class ABR_Modeler:
 	                rounded=True)
 				call("dot -Tpng tree.dot -o tree_{}.png".format(i), shell=True)
 
-	def create_abr_model(self):
-		self.load_data_train_abr_model()
-		self.form_train_val_abr_model()
+	def create_abr_model(self, skip_preproc=False):
+		if not skip_preproc:
+			self.load_data('raw')
+			self.form_train_val_abr_model()
+			self.save_train_val()
+		else:
+			for service_type in self._types:
+				self.load_data(service_type, data_type='formatted')
 		self.train_and_evaluate_abr_model()
 
 if __name__ == "__main__":
 	abr_m = ABR_Modeler()
-	abr_m.create_abr_model()
+	abr_m.create_abr_model(skip_preproc=True)
+
+
